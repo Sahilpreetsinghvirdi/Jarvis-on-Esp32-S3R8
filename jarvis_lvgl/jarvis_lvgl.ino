@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <Arduino_GFX_Library.h>
 #include <lvgl.h>
+#include <Wire.h>
 #include "fonts.h"
 
 // ===== CONFIG =====
@@ -79,6 +80,25 @@ static lv_style_t style_title;
 String chatLines[MAX_LINES];
 int chatCount = 0;
 
+// ===== CONVERSATION HISTORY =====
+#define MAX_HISTORY 10
+String histRole[MAX_HISTORY];
+String histContent[MAX_HISTORY];
+int histCount = 0;
+
+void histAdd(const char *role, const char *content) {
+  if (histCount >= MAX_HISTORY) {
+    for (int i = 0; i < MAX_HISTORY - 1; i++) {
+      histRole[i] = histRole[i + 1];
+      histContent[i] = histContent[i + 1];
+    }
+    histCount = MAX_HISTORY - 1;
+  }
+  histRole[histCount] = role;
+  histContent[histCount] = content;
+  histCount++;
+}
+
 // ===== STREAMING =====
 bool isStreaming = false;
 String streamBuffer = "";
@@ -110,6 +130,110 @@ void rgb_rainbow_cycle(int cycles) {
   neopixelWrite(RGB_LED_PIN, 0, 0, 0);
 }
 
+// ===== QMI8658 IMU =====
+#define QMI8658_ADDR       0x6B
+#define QMI8658_WHO_AM_I   0x00
+#define QMI8658_CTRL2      0x03
+#define QMI8658_CTRL3      0x04
+#define QMI8658_CTRL7      0x08
+#define QMI8658_AX_L       0x35
+#define QMI8658_STATUSINT  0x2D
+
+#define IMU_SDA 48
+#define IMU_SCL 47
+
+bool imuOK = false;
+uint8_t currentRotation = 1;
+uint8_t pendingRotation = 1;
+int rotStableCount = 0;
+#define ROT_THRESHOLD 0.4
+#define ROT_STABLE_N  5
+#define ROT_CHECK_MS  200
+unsigned long lastRotCheck = 0;
+
+uint8_t qmi_read_reg(uint8_t reg) {
+  Wire.beginTransmission(QMI8658_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom((uint8_t)QMI8658_ADDR, (uint8_t)1);
+  return Wire.read();
+}
+
+void qmi_write_reg(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(QMI8658_ADDR);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission();
+}
+
+void qmi_init() {
+  Wire.begin(IMU_SDA, IMU_SCL, 400000);
+  delay(100);
+  uint8_t who = qmi_read_reg(QMI8658_WHO_AM_I);
+  Serial.printf("[IMU] WHO_AM_I = 0x%02X\n", who);
+  if (who != 0x05) {
+    Serial.println("[IMU] QMI8658 not found!");
+    imuOK = false;
+    return;
+  }
+  qmi_write_reg(QMI8658_CTRL7, 0x03);
+  delay(50);
+  uint8_t ctrl7 = qmi_read_reg(QMI8658_CTRL7);
+  Serial.printf("[IMU] CTRL7 = 0x%02X (accel+gyro enabled)\n", ctrl7);
+  imuOK = true;
+}
+
+void qmi_read_accel(float &ax, float &ay, float &az) {
+  Wire.beginTransmission(QMI8658_ADDR);
+  Wire.write(QMI8658_AX_L);
+  Wire.endTransmission(false);
+  Wire.requestFrom((uint8_t)QMI8658_ADDR, (uint8_t)6);
+  int16_t raw[3];
+  for (int i = 0; i < 3; i++) {
+    uint8_t lo = Wire.read();
+    uint8_t hi = Wire.read();
+    raw[i] = (int16_t)((hi << 8) | lo);
+  }
+  float scale = 4.0 / 32768.0;
+  ax = raw[0] * scale;
+  ay = raw[1] * scale;
+  az = raw[2] * scale;
+}
+
+uint8_t calc_rotation(float ax, float ay, float az) {
+  float absX = fabs(ax), absY = fabs(ay), absZ = fabs(az);
+  if (absX > absY && absX > absZ) {
+    return (ax > 0) ? 3 : 1;
+  }
+  return 1;
+}
+
+void check_auto_rotation() {
+  if (!imuOK) return;
+  unsigned long now = millis();
+  if (now - lastRotCheck < ROT_CHECK_MS) return;
+  lastRotCheck = now;
+
+  float ax, ay, az;
+  qmi_read_accel(ax, ay, az);
+  uint8_t rot = calc_rotation(ax, ay, az);
+
+  if (rot == pendingRotation) {
+    rotStableCount++;
+  } else {
+    pendingRotation = rot;
+    rotStableCount = 1;
+  }
+
+  if (rotStableCount >= ROT_STABLE_N && rot != currentRotation) {
+    currentRotation = rot;
+    rotStableCount = 0;
+    Serial.printf("[IMU] Rotation -> %d\n", currentRotation);
+    gfx->setRotation(currentRotation);
+    lv_refr_now(NULL);
+  }
+}
+
 // ===== LVGL FLUSH =====
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
   uint32_t w = area->x2 - area->x1 + 1;
@@ -118,22 +242,28 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
   lv_disp_flush_ready(disp);
 }
 
-// ===== COMPOSITE FONTS (Latin -> Devanagari -> Math) =====
+// ===== COMPOSITE FONTS (Latin -> Devanagari -> Gurmukhi -> Math) =====
 static lv_font_t font_msg_14;
 static lv_font_t font_msg_12;
 static lv_font_t font_bar_12;
 static lv_font_t fallback_deva_14;
+static lv_font_t fallback_gur_14;
 static lv_font_t fallback_math_14;
 static lv_font_t fallback_deva_12;
+static lv_font_t fallback_gur_12;
 
 void setup_fonts() {
   memcpy(&fallback_math_14, &noto_math_14, sizeof(lv_font_t));
+  memcpy(&fallback_gur_14, &noto_gurmukhi_14, sizeof(lv_font_t));
+  fallback_gur_14.fallback = &fallback_math_14;
   memcpy(&fallback_deva_14, &noto_devanagari_14, sizeof(lv_font_t));
-  fallback_deva_14.fallback = &fallback_math_14;
+  fallback_deva_14.fallback = &fallback_gur_14;
   memcpy(&font_msg_14, &noto_latin_14, sizeof(lv_font_t));
   font_msg_14.fallback = &fallback_deva_14;
 
+  memcpy(&fallback_gur_12, &noto_gurmukhi_12, sizeof(lv_font_t));
   memcpy(&fallback_deva_12, &noto_devanagari_12, sizeof(lv_font_t));
+  fallback_deva_12.fallback = &fallback_gur_12;
   memcpy(&font_msg_12, &noto_latin_12, sizeof(lv_font_t));
   font_msg_12.fallback = &fallback_deva_12;
 
@@ -534,13 +664,18 @@ void sendToGroq(String query) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + String(GROQ_API_KEY));
 
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<4096> doc;
   doc["model"] = GROQ_MODEL;
   doc["stream"] = true;
   JsonArray messages = doc.createNestedArray("messages");
   JsonObject sys = messages.createNestedObject();
   sys["role"] = "system";
-  sys["content"] = "You are JARVIS, an advanced AI assistant created by Sahilpreet. Answer thoroughly and helpfully. You may use emojis, formulas, and detailed explanations as needed. Format math/physics expressions using plain text notation (e.g. F=ma, E=mc^2, v^2=u^2+2as). Respond in the same language the user writes in. Use ASCII art for simple diagrams when helpful.";
+  sys["content"] = "You are JARVIS, an AI assistant by Sahilpreet. Be concise — answer only what's asked, no filler, no unnecessary explanations. Use short paragraphs. Only go detailed when the user explicitly asks for it. Respond in the user's language. Use plain text math notation (F=ma, E=mc^2). Use emojis sparingly.";
+  for (int i = 0; i < histCount; i++) {
+    JsonObject msg = messages.createNestedObject();
+    msg["role"] = histRole[i];
+    msg["content"] = histContent[i];
+  }
   JsonObject user = messages.createNestedObject();
   user["role"] = "user";
   user["content"] = query.c_str();
@@ -558,6 +693,8 @@ void sendToGroq(String query) {
   isStreaming = true;
   streamBuffer = "";
   rgb_blue();
+
+  histAdd("user", query.c_str());
 
   lv_obj_t *container = lv_obj_create(msg_list);
   lv_obj_set_width(container, SCR_W - 12);
@@ -624,6 +761,8 @@ void sendToGroq(String query) {
   isStreaming = false;
   rgb_off();
 
+  histAdd("assistant", streamBuffer.c_str());
+
   if (chatCount < MAX_LINES) {
     chatLines[chatCount++] = streamBuffer;
   }
@@ -632,131 +771,69 @@ void sendToGroq(String query) {
 }
 
 // ===== BUTTON HANDLER =====
-// Main: 1tap+hold=scroll down, 2tap+hold=scroll up, 3tap=open settings
-// WiFi: 1tap=open networks, 1tap+hold=next, 2tap+hold=prev, 3tap+hold=connect, 4tap=home
-
-static bool lastBtnRaw = HIGH;
-static bool btnStable = HIGH;
-static unsigned long btnDebounceTime = 0;
-static unsigned long btnDownTime = 0;
-static unsigned long lastTapTime = 0;
-static int tapCount = 0;
-static bool waitingForTaps = false;
-static bool holdFired = false;
-
-#define BTN_DEBOUNCE   50
-#define BTN_TAP_WIN    400
-#define BTN_HOLD_MS    300
-
-void doAction(int taps, bool hold) {
-  if (currentScreen == SCR_MAIN) {
-    if (hold && taps == 1)      lv_obj_scroll_by(msg_list, 0, -50, LV_ANIM_ON);
-    else if (hold && taps == 2) lv_obj_scroll_by(msg_list, 0, 50, LV_ANIM_ON);
-    else if (!hold && taps == 3) switchToScreen(SCR_SETTINGS);
-  }
-  else if (currentScreen == SCR_WIFI_SELECT) {
-    if (!hold && taps == 1) {
-      scanWiFiAndPopulate();
-    } else if (hold && taps == 1) {
-      wifiSelectedIdx++;
-      if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0;
-      updateWifiSelection();
-    } else if (hold && taps == 2) {
-      wifiSelectedIdx--;
-      if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1;
-      updateWifiSelection();
-    } else if (hold && taps == 3) {
-      if (wifiCount > 0 && wifiSelectedIdx < wifiCount) {
-        lv_label_set_text_fmt(wifi_title, ">> CONNECTING TO %s...", wifiSSIDs[wifiSelectedIdx].c_str());
-        lv_refr_now(NULL);
-        WiFi.disconnect();
-        delay(200);
-        WiFi.begin(wifiSSIDs[wifiSelectedIdx].c_str(), "");
-        int tries = 0;
-        while (WiFi.status() != WL_CONNECTED && tries < 30) { delay(500); tries++; }
-        if (WiFi.status() == WL_CONNECTED) {
-          lv_label_set_text_fmt(lbl_wifi, "WiFi: %s", WiFi.localIP().toString().c_str());
-          lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
-          rgb_green(); delay(500); rgb_off();
-          switchToScreen(SCR_MAIN);
-          add_sys_msg(("WiFi OK: " + WiFi.localIP().toString()).c_str());
-          add_sys_msg("Type query in Serial Monitor...");
-          lv_label_set_text(input_label, "Type in Serial Monitor...");
-        } else {
-          lv_label_set_text_fmt(wifi_title, ">> CONNECT FAILED");
-          lv_refr_now(NULL);
-          delay(1000);
-          scanWiFiAndPopulate();
-        }
-      }
-    } else if (!hold && taps == 4) {
-      switchToScreen(SCR_MAIN);
-    }
-  }
-  else if (currentScreen == SCR_SETTINGS) {
-    if (!hold && taps == 1) {
-      settingsIdx++;
-      if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0;
-      updateSettingsDisplay();
-    } else if (!hold && taps == 2) {
-      settingsIdx--;
-      if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1;
-      updateSettingsDisplay();
-    } else if (!hold && taps == 3) {
-      switch (settingsIdx) {
-        case 0: switchToScreen(SCR_WIFI_SELECT); break;
-        case 2:
-          ledEnabled = !ledEnabled;
-          if (!ledEnabled) rgb_off(); else rgb_cyan();
-          updateSettingsDisplay();
-          break;
-        case 4: switchToScreen(SCR_MAIN); break;
-      }
-    }
-  }
-}
+static int btnState = HIGH, lastBtnState = HIGH;
+static unsigned long btnPressTime = 0, lastPressTime = 0;
+static unsigned long lastScrollTime = 0;
+static int pressCount = 0;
+static bool btnHeld = false;
 
 void handleButton() {
-  bool reading = digitalRead(BTN_PIN);
+  int reading = digitalRead(BTN_PIN);
   unsigned long now = millis();
 
-  if (reading != lastBtnRaw) btnDebounceTime = now;
-  lastBtnRaw = reading;
-  if ((now - btnDebounceTime) < BTN_DEBOUNCE) return;
-
-  if (reading != btnStable) {
-    btnStable = reading;
-
+  if (reading != lastBtnState) {
     if (reading == LOW) {
-      btnDownTime = now;
-      holdFired = false;
+      btnPressTime = now;
+      pressCount++;
+      lastPressTime = now;
     } else {
-      unsigned long held = now - btnDownTime;
-      if (held < BTN_HOLD_MS) {
-        tapCount++;
-        lastTapTime = now;
-        waitingForTaps = true;
+      unsigned long holdTime = now - btnPressTime;
+      if (holdTime >= 500 && pressCount == 1) {
+        if (currentScreen == SCR_MAIN) lv_obj_scroll_by(msg_list, 0, 40, LV_ANIM_ON);
+        else if (currentScreen == SCR_WIFI_SELECT) { wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection(); }
+        else if (currentScreen == SCR_SETTINGS) { settingsIdx++; if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0; updateSettingsDisplay(); }
+      } else if (holdTime >= 500 && pressCount >= 2) {
+        if (currentScreen == SCR_MAIN) lv_obj_scroll_by(msg_list, 0, -40, LV_ANIM_ON);
+        else if (currentScreen == SCR_WIFI_SELECT) { wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection(); }
+        else if (currentScreen == SCR_SETTINGS) { settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay(); }
+      } else if (holdTime < 300 && pressCount >= 3) {
+        if (currentScreen == SCR_MAIN) switchToScreen(SCR_SETTINGS);
+        else if (currentScreen == SCR_SETTINGS) {
+          switch (settingsIdx) {
+            case 0: switchToScreen(SCR_WIFI_SELECT); break;
+            case 2: ledEnabled = !ledEnabled; if (!ledEnabled) rgb_off(); else rgb_cyan(); updateSettingsDisplay(); break;
+            case 4: switchToScreen(SCR_MAIN); break;
+          }
+        }
+        pressCount = 0;
+      }
+      btnHeld = false;
+    }
+  }
+
+  if (btnState == LOW && (now - btnPressTime > 500)) {
+    if (!btnHeld) {
+      btnHeld = true;
+      lastScrollTime = 0;
+    }
+    if (now - lastScrollTime > 60) {
+      lastScrollTime = now;
+      if (currentScreen == SCR_MAIN) {
+        if (pressCount == 1) lv_obj_scroll_by(msg_list, 0, 15, LV_ANIM_ON);
+        else if (pressCount >= 2) lv_obj_scroll_by(msg_list, 0, -15, LV_ANIM_ON);
+      } else if (currentScreen == SCR_WIFI_SELECT) {
+        if (pressCount == 1) { wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection(); }
+        else if (pressCount >= 2) { wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection(); }
+      } else if (currentScreen == SCR_SETTINGS) {
+        if (pressCount == 1) { settingsIdx++; if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0; updateSettingsDisplay(); }
+        else if (pressCount >= 2) { settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay(); }
       }
     }
   }
 
-  if (waitingForTaps && !holdFired && btnStable == LOW) {
-    unsigned long held = now - btnDownTime;
-    if (held >= BTN_HOLD_MS) {
-      holdFired = true;
-      waitingForTaps = false;
-      int t = tapCount;
-      tapCount = 0;
-      doAction(t, true);
-    }
-  }
-
-  if (waitingForTaps && (now - lastTapTime > BTN_TAP_WIN)) {
-    waitingForTaps = false;
-    int t = tapCount;
-    tapCount = 0;
-    doAction(t, false);
-  }
+  if (now - lastPressTime > 1000 && pressCount > 0) pressCount = 0;
+  lastBtnState = reading;
+  btnState = reading;
 }
 
 // ===== SERIAL INPUT =====
@@ -771,6 +848,7 @@ void handleSerialInput() {
         if (serialInput == "!clear") {
           lv_obj_clean(msg_list);
           chatCount = 0;
+          histCount = 0;
           add_sys_msg("Chat cleared.");
         } else if (serialInput == "!wifi") {
           switchToScreen(SCR_WIFI_SELECT);
@@ -855,6 +933,8 @@ void setup() {
   neopixelWrite(RGB_LED_PIN, 0, 0, 0);
   rgb_rainbow_cycle(2);
 
+  qmi_init();
+
   lv_init();
   lv_disp_draw_buf_init(&disp_buf, buf1, buf2, SCR_W * LV_BUF_LINES);
 
@@ -895,6 +975,7 @@ void setup() {
 void loop() {
   handleButton();
   handleSerialInput();
+  check_auto_rotation();
   lv_timer_handler();
 
   if (wifiConnecting) {

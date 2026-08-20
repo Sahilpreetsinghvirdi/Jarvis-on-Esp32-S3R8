@@ -248,7 +248,7 @@ void ui_create_wifi_screen() {
   lv_obj_set_style_pad_row(wifi_list, 3, 0);
 
   wifi_hint = lv_label_create(scr_wifi);
-  lv_label_set_text(wifi_hint, "Tap=prev | Hold=next | 2tap=connect");
+  lv_label_set_text(wifi_hint, "1tap=scan | Hold=next | 2hold=prev | 3hold=connect");
   lv_obj_set_style_text_font(wifi_hint, &font_msg_12, 0);
   lv_obj_set_style_text_color(wifi_hint, lv_color_hex(0x6b7280), 0);
   lv_obj_align(wifi_hint, LV_ALIGN_BOTTOM_MID, 0, -4);
@@ -422,7 +422,7 @@ void ui_create_settings() {
   }
 
   lv_obj_t *hint = lv_label_create(scr_settings);
-  lv_label_set_text(hint, "Scroll: 1x hold | Select: triple tap");
+  lv_label_set_text(hint, "1tap=next | 2tap=back | 3tap=select");
   lv_obj_set_style_text_font(hint, &font_msg_12, 0);
   lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
@@ -632,30 +632,96 @@ void sendToGroq(String query) {
 }
 
 // ===== BUTTON HANDLER =====
-// 1 tap = scroll DOWN, hold = scroll UP, 2 taps = select, hold 3s = settings
-static bool lastBtnReading = HIGH;
+// Main: 1tap+hold=scroll down, 2tap+hold=scroll up, 3tap=open settings
+// WiFi: 1tap=open networks, 1tap+hold=next, 2tap+hold=prev, 3tap+hold=connect, 4tap=home
+
+static bool lastBtnRaw = HIGH;
 static bool btnStable = HIGH;
 static unsigned long btnDebounceTime = 0;
 static unsigned long btnDownTime = 0;
 static unsigned long lastTapTime = 0;
 static int tapCount = 0;
 static bool waitingForTaps = false;
-static bool holdHandled = false;
+static bool holdFired = false;
 
-#define BTN_DEBOUNCE     50
-#define BTN_TAP_WINDOW   400
-#define BTN_HOLD_TIME    300
-#define BTN_LONG_HOLD    3000
+#define BTN_DEBOUNCE   50
+#define BTN_TAP_WIN    400
+#define BTN_HOLD_MS    300
+
+void doAction(int taps, bool hold) {
+  if (currentScreen == SCR_MAIN) {
+    if (hold && taps == 1)      lv_obj_scroll_by(msg_list, 0, -50, LV_ANIM_ON);
+    else if (hold && taps == 2) lv_obj_scroll_by(msg_list, 0, 50, LV_ANIM_ON);
+    else if (!hold && taps == 3) switchToScreen(SCR_SETTINGS);
+  }
+  else if (currentScreen == SCR_WIFI_SELECT) {
+    if (!hold && taps == 1) {
+      scanWiFiAndPopulate();
+    } else if (hold && taps == 1) {
+      wifiSelectedIdx++;
+      if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0;
+      updateWifiSelection();
+    } else if (hold && taps == 2) {
+      wifiSelectedIdx--;
+      if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1;
+      updateWifiSelection();
+    } else if (hold && taps == 3) {
+      if (wifiCount > 0 && wifiSelectedIdx < wifiCount) {
+        lv_label_set_text_fmt(wifi_title, ">> CONNECTING TO %s...", wifiSSIDs[wifiSelectedIdx].c_str());
+        lv_refr_now(NULL);
+        WiFi.disconnect();
+        delay(200);
+        WiFi.begin(wifiSSIDs[wifiSelectedIdx].c_str(), "");
+        int tries = 0;
+        while (WiFi.status() != WL_CONNECTED && tries < 30) { delay(500); tries++; }
+        if (WiFi.status() == WL_CONNECTED) {
+          lv_label_set_text_fmt(lbl_wifi, "WiFi: %s", WiFi.localIP().toString().c_str());
+          lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
+          rgb_green(); delay(500); rgb_off();
+          switchToScreen(SCR_MAIN);
+          add_sys_msg(("WiFi OK: " + WiFi.localIP().toString()).c_str());
+          add_sys_msg("Type query in Serial Monitor...");
+          lv_label_set_text(input_label, "Type in Serial Monitor...");
+        } else {
+          lv_label_set_text_fmt(wifi_title, ">> CONNECT FAILED");
+          lv_refr_now(NULL);
+          delay(1000);
+          scanWiFiAndPopulate();
+        }
+      }
+    } else if (!hold && taps == 4) {
+      switchToScreen(SCR_MAIN);
+    }
+  }
+  else if (currentScreen == SCR_SETTINGS) {
+    if (!hold && taps == 1) {
+      settingsIdx++;
+      if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0;
+      updateSettingsDisplay();
+    } else if (!hold && taps == 2) {
+      settingsIdx--;
+      if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1;
+      updateSettingsDisplay();
+    } else if (!hold && taps == 3) {
+      switch (settingsIdx) {
+        case 0: switchToScreen(SCR_WIFI_SELECT); break;
+        case 2:
+          ledEnabled = !ledEnabled;
+          if (!ledEnabled) rgb_off(); else rgb_cyan();
+          updateSettingsDisplay();
+          break;
+        case 4: switchToScreen(SCR_MAIN); break;
+      }
+    }
+  }
+}
 
 void handleButton() {
   bool reading = digitalRead(BTN_PIN);
   unsigned long now = millis();
 
-  if (reading != lastBtnReading) {
-    btnDebounceTime = now;
-  }
-  lastBtnReading = reading;
-
+  if (reading != lastBtnRaw) btnDebounceTime = now;
+  lastBtnRaw = reading;
   if ((now - btnDebounceTime) < BTN_DEBOUNCE) return;
 
   if (reading != btnStable) {
@@ -663,10 +729,10 @@ void handleButton() {
 
     if (reading == LOW) {
       btnDownTime = now;
-      holdHandled = false;
+      holdFired = false;
     } else {
-      unsigned long holdTime = now - btnDownTime;
-      if (holdTime < BTN_HOLD_TIME) {
+      unsigned long held = now - btnDownTime;
+      if (held < BTN_HOLD_MS) {
         tapCount++;
         lastTapTime = now;
         waitingForTaps = true;
@@ -674,87 +740,22 @@ void handleButton() {
     }
   }
 
-  if (waitingForTaps && !holdHandled && btnStable == LOW) {
-    unsigned long heldFor = now - btnDownTime;
-
-    if (heldFor >= BTN_LONG_HOLD) {
-      holdHandled = true;
+  if (waitingForTaps && !holdFired && btnStable == LOW) {
+    unsigned long held = now - btnDownTime;
+    if (held >= BTN_HOLD_MS) {
+      holdFired = true;
       waitingForTaps = false;
+      int t = tapCount;
       tapCount = 0;
-      if (currentScreen == SCR_MAIN) {
-        switchToScreen(SCR_SETTINGS);
-      }
-    } else if (heldFor >= BTN_HOLD_TIME) {
-      holdHandled = true;
-      waitingForTaps = false;
-      tapCount = 0;
-
-      if (currentScreen == SCR_MAIN) {
-        lv_obj_scroll_by(msg_list, 0, -50, LV_ANIM_ON);
-      } else if (currentScreen == SCR_WIFI_SELECT) {
-        wifiSelectedIdx++;
-        if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0;
-        updateWifiSelection();
-      } else if (currentScreen == SCR_SETTINGS) {
-        settingsIdx++;
-        if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0;
-        updateSettingsDisplay();
-      }
+      doAction(t, true);
     }
   }
 
-  if (waitingForTaps && (now - lastTapTime > BTN_TAP_WINDOW)) {
+  if (waitingForTaps && (now - lastTapTime > BTN_TAP_WIN)) {
     waitingForTaps = false;
-
-    if (tapCount == 1) {
-      if (currentScreen == SCR_MAIN) {
-        lv_obj_scroll_by(msg_list, 0, 50, LV_ANIM_ON);
-      } else if (currentScreen == SCR_WIFI_SELECT) {
-        wifiSelectedIdx--;
-        if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1;
-        updateWifiSelection();
-      } else if (currentScreen == SCR_SETTINGS) {
-        settingsIdx--;
-        if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1;
-        updateSettingsDisplay();
-      }
-    } else if (tapCount >= 2) {
-      if (currentScreen == SCR_WIFI_SELECT) {
-        if (wifiCount > 0 && wifiSelectedIdx < wifiCount) {
-          lv_label_set_text_fmt(wifi_title, ">> CONNECTING TO %s...", wifiSSIDs[wifiSelectedIdx].c_str());
-          lv_refr_now(NULL);
-          WiFi.disconnect();
-          delay(200);
-          WiFi.begin(wifiSSIDs[wifiSelectedIdx].c_str(), "");
-          int tries = 0;
-          while (WiFi.status() != WL_CONNECTED && tries < 30) { delay(500); tries++; }
-          if (WiFi.status() == WL_CONNECTED) {
-            lv_label_set_text_fmt(lbl_wifi, "WiFi: %s", WiFi.localIP().toString().c_str());
-            lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
-            rgb_green(); delay(500); rgb_off();
-            switchToScreen(SCR_MAIN);
-            add_sys_msg(("WiFi OK: " + WiFi.localIP().toString()).c_str());
-            add_sys_msg("Type query in Serial Monitor...");
-            lv_label_set_text(input_label, "Type in Serial Monitor...");
-          } else {
-            lv_label_set_text_fmt(wifi_title, ">> FAILED. Try another.");
-          }
-        }
-      } else if (currentScreen == SCR_SETTINGS) {
-        switch (settingsIdx) {
-          case 0: switchToScreen(SCR_WIFI_SELECT); break;
-          case 2:
-            ledEnabled = !ledEnabled;
-            if (!ledEnabled) rgb_off(); else rgb_cyan();
-            updateSettingsDisplay();
-            break;
-          case 4: switchToScreen(SCR_MAIN); break;
-        }
-      } else if (currentScreen == SCR_MAIN) {
-        switchToScreen(SCR_SETTINGS);
-      }
-    }
+    int t = tapCount;
     tapCount = 0;
+    doAction(t, false);
   }
 }
 
@@ -809,26 +810,34 @@ void showSplash() {
   lv_label_set_text(title, "J A R V I S");
   lv_obj_set_style_text_font(title, &noto_latin_14, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(title, LV_ALIGN_CENTER, 0, -20);
+  lv_obj_align(title, LV_ALIGN_CENTER, 0, -30);
 
   lv_obj_t *sub = lv_label_create(scr_splash);
   lv_label_set_text(sub, "ESP32-S3 AI Terminal");
   lv_obj_set_style_text_font(sub, &font_msg_12, 0);
   lv_obj_set_style_text_color(sub, lv_color_hex(0x9ca3af), 0);
-  lv_obj_align(sub, LV_ALIGN_CENTER, 0, 8);
+  lv_obj_align(sub, LV_ALIGN_CENTER, 0, -6);
 
   lv_obj_t *ver = lv_label_create(scr_splash);
   lv_label_set_text(ver, "v1.0 | Powered by Groq");
   lv_obj_set_style_text_font(ver, &font_msg_12, 0);
   lv_obj_set_style_text_color(ver, lv_color_hex(0x6b7280), 0);
-  lv_obj_align(ver, LV_ALIGN_CENTER, 0, 26);
+  lv_obj_align(ver, LV_ALIGN_CENTER, 0, 10);
+
+  lv_obj_t *loadtxt = lv_label_create(scr_splash);
+  lv_label_set_text(loadtxt, "Initializing...");
+  lv_obj_set_style_text_font(loadtxt, &font_msg_12, 0);
+  lv_obj_set_style_text_color(loadtxt, lv_color_hex(0x22c55e), 0);
+  lv_obj_align(loadtxt, LV_ALIGN_CENTER, 0, 30);
 
   lv_refr_now(NULL);
-
-  lv_refr_now(NULL);
-
-  delay(2000);
+  delay(2500);
 }
+
+// ===== WIFI CONNECT STATE =====
+static bool wifiConnecting = false;
+static unsigned long wifiStartMs = 0;
+#define WIFI_TIMEOUT_MS 15000
 
 // ===== SETUP =====
 void setup() {
@@ -864,35 +873,21 @@ void setup() {
 
   showSplash();
 
-  currentScreen = SCR_WIFI_SELECT;
-  lv_scr_load(scr_wifi);
+  currentScreen = SCR_MAIN;
+  lv_scr_load(scr_main);
   lv_refr_now(NULL);
 
+  add_sys_msg("JARVIS v1.0 online.");
+  add_sys_msg("Connecting to WiFi...");
+  lv_label_set_text(input_label, "Connecting...");
+
+  Serial.println("[JARVIS] Starting WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  wifiConnecting = true;
+  wifiStartMs = millis();
 
-  int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 20) {
-    delay(500);
-    tries++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    lv_label_set_text_fmt(lbl_wifi, "WiFi: %s", WiFi.localIP().toString().c_str());
-    lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
-    switchToScreen(SCR_MAIN);
-    add_sys_msg(("WiFi OK: " + WiFi.localIP().toString()).c_str());
-    add_sys_msg((String("Model: ") + GROQ_MODEL).c_str());
-    add_sys_msg("Type query in Serial Monitor...");
-    add_sys_msg("Commands: !clear !wifi !settings !bright 50");
-    lv_label_set_text(input_label, "Type in Serial Monitor...");
-  } else {
-    lv_label_set_text(lbl_wifi, "WiFi: None");
-    lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xef4444), 0);
-    add_sys_msg("! WiFi failed - use !wifi or select below");
-  }
-
-  Serial.println("\n[JARVIS LVGL] Ready.");
+  Serial.println("[JARVIS] Ready. Type messages below.");
   Serial.println("Commands: !clear !wifi !settings !bright <0-100>");
 }
 
@@ -901,5 +896,32 @@ void loop() {
   handleButton();
   handleSerialInput();
   lv_timer_handler();
+
+  if (wifiConnecting) {
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiConnecting = false;
+      lv_label_set_text_fmt(lbl_wifi, "WiFi: %s", WiFi.localIP().toString().c_str());
+      lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
+      rgb_green(); delay(300); rgb_off();
+      add_sys_msg(("WiFi connected: " + WiFi.localIP().toString()).c_str());
+      add_sys_msg("Type query in Serial Monitor...");
+      lv_label_set_text(input_label, "Type in Serial Monitor...");
+      Serial.println("[JARVIS] WiFi connected: " + WiFi.localIP().toString());
+    } else if (millis() - wifiStartMs > WIFI_TIMEOUT_MS) {
+      wifiConnecting = false;
+      lv_label_set_text(lbl_wifi, "WiFi: Failed");
+      lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xef4444), 0);
+      add_sys_msg("! WiFi connect failed. Use button to scan.");
+      lv_label_set_text(input_label, "Use button to scan WiFi");
+      Serial.println("[JARVIS] WiFi connection timed out.");
+    } else {
+      static unsigned long lastBlink = 0;
+      if (millis() - lastBlink > 500) {
+        lastBlink = millis();
+        lv_label_set_text(input_label, "Connecting...");
+      }
+    }
+  }
+
   delay(2);
 }

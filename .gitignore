@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.map
+*.merged.bin
+libraries.cache
+compile_commands.json
+build_opt.h
+build.options.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

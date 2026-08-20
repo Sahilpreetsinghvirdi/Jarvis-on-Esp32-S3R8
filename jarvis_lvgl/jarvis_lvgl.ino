@@ -133,8 +133,11 @@ void rgb_rainbow_cycle(int cycles) {
 // ===== QMI8658 IMU =====
 #define QMI8658_ADDR       0x6B
 #define QMI8658_WHO_AM_I   0x00
+#define QMI8658_CTRL1      0x02
 #define QMI8658_CTRL2      0x03
 #define QMI8658_CTRL3      0x04
+#define QMI8658_CTRL5      0x06
+#define QMI8658_CTRL6      0x07
 #define QMI8658_CTRL7      0x08
 #define QMI8658_AX_L       0x35
 #define QMI8658_STATUSINT  0x2D
@@ -176,10 +179,18 @@ void qmi_init() {
     imuOK = false;
     return;
   }
-  qmi_write_reg(QMI8658_CTRL7, 0x03);
+  uint8_t ctrl1 = qmi_read_reg(QMI8658_CTRL1);
+  ctrl1 &= 0xFE;
+  ctrl1 |= 0x40;
+  qmi_write_reg(QMI8658_CTRL1, ctrl1);
+  qmi_write_reg(QMI8658_CTRL7, 0x43);
+  qmi_write_reg(QMI8658_CTRL6, 0x00);
+  qmi_write_reg(QMI8658_CTRL2, 0x11);
+  qmi_write_reg(QMI8658_CTRL3, 0x20);
+  qmi_write_reg(QMI8658_CTRL5, 0x01);
   delay(50);
-  uint8_t ctrl7 = qmi_read_reg(QMI8658_CTRL7);
-  Serial.printf("[IMU] CTRL7 = 0x%02X (accel+gyro enabled)\n", ctrl7);
+  uint8_t c7 = qmi_read_reg(QMI8658_CTRL7);
+  Serial.printf("[IMU] CTRL7=0x%02X initialized OK\n", c7);
   imuOK = true;
 }
 
@@ -201,11 +212,11 @@ void qmi_read_accel(float &ax, float &ay, float &az) {
 }
 
 uint8_t calc_rotation(float ax, float ay, float az) {
-  float absX = fabs(ax), absY = fabs(ay), absZ = fabs(az);
-  if (absX > absY && absX > absZ) {
-    return (ax > 0) ? 3 : 1;
-  }
-  return 1;
+  // Use atan2 to get the tilt angle relative to landscape orientation.
+  // Device held normally: gravity along -Y or +Z depending on mounting.
+  // We map the full 360° range to rotations 1 or 3 (both landscape 320x172).
+  float angle = atan2(ay, az) * 180.0 / PI;
+  return (angle > 0) ? 1 : 3;
 }
 
 void check_auto_rotation() {
@@ -218,6 +229,12 @@ void check_auto_rotation() {
   qmi_read_accel(ax, ay, az);
   uint8_t rot = calc_rotation(ax, ay, az);
 
+  static int lastLog = 0;
+  if (millis() - lastLog > 2000) {
+    lastLog = millis();
+    Serial.printf("[IMU] rot=%d\n", currentRotation);
+  }
+
   if (rot == pendingRotation) {
     rotStableCount++;
   } else {
@@ -228,8 +245,9 @@ void check_auto_rotation() {
   if (rotStableCount >= ROT_STABLE_N && rot != currentRotation) {
     currentRotation = rot;
     rotStableCount = 0;
-    Serial.printf("[IMU] Rotation -> %d\n", currentRotation);
+    Serial.printf("[IMU] >>> ROTATION CHANGE -> %d\n", currentRotation);
     gfx->setRotation(currentRotation);
+    lv_obj_invalidate(lv_scr_act());
     lv_refr_now(NULL);
   }
 }
@@ -850,6 +868,17 @@ void handleSerialInput() {
           chatCount = 0;
           histCount = 0;
           add_sys_msg("Chat cleared.");
+        } else if (serialInput == "!imu") {
+          if (imuOK) {
+            float ax, ay, az;
+            qmi_read_accel(ax, ay, az);
+            float angle = atan2(ay, az) * 180.0 / PI;
+            String msg = "IMU: ax=" + String(ax,2) + " ay=" + String(ay,2) + " az=" + String(az,2) + " angle=" + String(angle,1) + " rot=" + String(currentRotation);
+            add_sys_msg(msg.c_str());
+            Serial.println("[IMU] " + msg);
+          } else {
+            add_sys_msg("IMU not detected");
+          }
         } else if (serialInput == "!wifi") {
           switchToScreen(SCR_WIFI_SELECT);
         } else if (serialInput == "!settings") {

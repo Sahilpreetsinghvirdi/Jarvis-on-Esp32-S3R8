@@ -18,3 +18,11 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# NPM/font build tools
+node_modules/
+package-lock.json
+package.json
+fonts/
+noto_*.c
+!jarvis_lvgl/noto_*.c

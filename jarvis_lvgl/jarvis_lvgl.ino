@@ -48,7 +48,7 @@ static uint8_t buf1[SCR_W * LV_BUF_LINES * 2];
 static uint8_t buf2[SCR_W * LV_BUF_LINES * 2];
 
 // ===== SCREENS =====
-enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT };
+enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT, SCR_BRIGHTNESS };
 static ScreenID currentScreen = SCR_DASHBOARD;
 static ScreenID previousScreen = SCR_DASHBOARD;
 
@@ -135,6 +135,11 @@ static lv_style_t style_dash_item;
 static lv_style_t style_dash_selected;
 static lv_style_t style_sdmenu_item;
 static lv_style_t style_sdmenu_selected;
+
+// ===== BRIGHTNESS SCREEN =====
+static lv_obj_t *scr_brightness = NULL;
+static lv_obj_t *brite_fill = NULL;
+static lv_obj_t *brite_label = NULL;
 
 // ===== SD CARD STATE =====
 static bool sdReady = false;
@@ -1116,6 +1121,61 @@ void updateSettingsDisplay() {
   }
 }
 
+// ===== BRIGHTNESS SCREEN =====
+
+void ui_create_brightness() {
+  scr_brightness = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_brightness, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(scr_brightness, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr_brightness, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(scr_brightness);
+  lv_label_set_text(title, ">> BRIGHTNESS");
+  lv_obj_set_style_text_font(title, &font_msg_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x60a5fa), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
+
+  lv_obj_t *line = lv_obj_create(scr_brightness);
+  lv_obj_set_size(line, SCR_W - 40, 1);
+  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
+  lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+
+  int barW = SCR_W - 80;
+  lv_obj_t *barBg = lv_obj_create(scr_brightness);
+  lv_obj_set_size(barBg, barW, 12);
+  lv_obj_align(barBg, LV_ALIGN_TOP_MID, 0, 70);
+  lv_obj_set_style_bg_color(barBg, lv_color_hex(0x1e3a5f), 0);
+  lv_obj_set_style_bg_opa(barBg, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(barBg, 6, 0);
+  lv_obj_set_style_border_width(barBg, 0, 0);
+  lv_obj_clear_flag(barBg, LV_OBJ_FLAG_SCROLLABLE);
+
+  brite_fill = lv_obj_create(barBg);
+  int fillW = map(currentBrightness, 0, 255, 0, barW);
+  lv_obj_set_size(brite_fill, fillW > 1 ? fillW : 1, 12);
+  lv_obj_align(brite_fill, LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_set_style_bg_color(brite_fill, lv_color_hex(0x22c55e), 0);
+  lv_obj_set_style_bg_opa(brite_fill, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(brite_fill, 6, 0);
+  lv_obj_set_style_border_width(brite_fill, 0, 0);
+  lv_obj_clear_flag(brite_fill, LV_OBJ_FLAG_SCROLLABLE);
+
+  brite_label = lv_label_create(scr_brightness);
+  lv_label_set_text_fmt(brite_label, "%d%%", map(currentBrightness, 0, 255, 0, 100));
+  lv_obj_set_style_text_font(brite_label, &font_msg_14, 0);
+  lv_obj_set_style_text_color(brite_label, lv_color_hex(0xfbbf24), 0);
+  lv_obj_align(brite_label, LV_ALIGN_TOP_MID, 0, 92);
+
+  lv_obj_t *hint = lv_label_create(scr_brightness);
+  lv_label_set_text(hint, "Hold=Down | 2Hold=Up | 2tap=Back");
+  lv_obj_set_style_text_font(hint, &font_msg_12, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
 // ===== CHAT DISPLAY =====
 void switchToScreen(ScreenID id) {
   previousScreen = currentScreen;
@@ -1157,6 +1217,13 @@ void switchToScreen(ScreenID id) {
       lv_scr_load(scr_wifi);
       scanWiFiAndPopulate();
       break;
+    case SCR_BRIGHTNESS: {
+      int w = map(currentBrightness, 0, 255, 0, SCR_W - 80);
+      lv_obj_set_width(brite_fill, w > 1 ? w : 1);
+      lv_label_set_text_fmt(brite_label, "%d%%", map(currentBrightness, 0, 255, 0, 100));
+      lv_scr_load(scr_brightness);
+      break;
+    }
   }
 }
 
@@ -1170,6 +1237,7 @@ void goBack() {
     case SCR_PHOTO_VIEW: photo_view_stop(); break;
     case SCR_SETTINGS: switchToScreen(SCR_DASHBOARD); break;
     case SCR_WIFI_SELECT: switchToScreen(SCR_SETTINGS); break;
+    case SCR_BRIGHTNESS: switchToScreen(SCR_SETTINGS); break;
   }
 }
 
@@ -1917,6 +1985,7 @@ static void doSelect() {
   } else if (currentScreen == SCR_SETTINGS) {
     switch (settingsIdx) {
       case 0: switchToScreen(SCR_WIFI_SELECT); break;
+      case 1: switchToScreen(SCR_BRIGHTNESS); break;
       case 2: ledEnabled = !ledEnabled; if (!ledEnabled) rgb_off(); else rgb_cyan(); updateSettingsDisplay(); break;
       case 3: autoRotateEnabled = !autoRotateEnabled; updateSettingsDisplay(); break;
       case 5: switchToScreen(SCR_DASHBOARD); break;
@@ -1960,6 +2029,12 @@ static void doScrollDown() {
     photoIdx++; if (photoIdx >= photoCount) photoIdx = 0; updatePhotoListSelection();
   } else if (currentScreen == SCR_SETTINGS) {
     settingsIdx++; if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0; updateSettingsDisplay();
+  } else if (currentScreen == SCR_BRIGHTNESS) {
+    currentBrightness = min(255, currentBrightness + 17);
+    ledcWrite(TFT_BL, currentBrightness);
+    int w = map(currentBrightness, 0, 255, 0, SCR_W - 80);
+    lv_obj_set_width(brite_fill, w > 1 ? w : 1);
+    lv_label_set_text_fmt(brite_label, "%d%%", map(currentBrightness, 0, 255, 0, 100));
   } else if (currentScreen == SCR_WIFI_SELECT) {
     wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection();
   }
@@ -1980,6 +2055,12 @@ static void doScrollUp() {
     photoIdx--; if (photoIdx < 0) photoIdx = photoCount - 1; updatePhotoListSelection();
   } else if (currentScreen == SCR_SETTINGS) {
     settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay();
+  } else if (currentScreen == SCR_BRIGHTNESS) {
+    currentBrightness = max(0, currentBrightness - 17);
+    ledcWrite(TFT_BL, currentBrightness);
+    int w = map(currentBrightness, 0, 255, 0, SCR_W - 80);
+    lv_obj_set_width(brite_fill, w > 1 ? w : 1);
+    lv_label_set_text_fmt(brite_label, "%d%%", map(currentBrightness, 0, 255, 0, 100));
   } else if (currentScreen == SCR_WIFI_SELECT) {
     wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection();
   }
@@ -2069,7 +2150,8 @@ void setup() {
 
   pinMode(BTN_PIN, INPUT_PULLUP);
   pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
+  ledcAttach(TFT_BL, 5000, 8);
+  ledcWrite(TFT_BL, currentBrightness);
 
   gfx->begin();
   gfx->setRotation(1);
@@ -2095,6 +2177,7 @@ void setup() {
   ui_create_sd_menu();
   ui_create_video_list();
   ui_create_photo_list();
+  ui_create_brightness();
 
   showSplash();
 

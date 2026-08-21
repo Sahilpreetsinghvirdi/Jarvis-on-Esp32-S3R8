@@ -1911,10 +1911,24 @@ void photo_view_start(int idx) {
       int srcY = (h - srcH) / 2;
       uint16_t rowBuf[320];
       for (int y = 0; y < h; y++) {
-        int sy = srcY + ((long)y * srcH / h);
+        long sy = ((long)y * srcH * 256 / h) + srcY * 256;
+        int sy0 = sy >> 8; if (sy0 >= h - 1) sy0 = h - 2;
+        int fy = sy & 0xFF;
         for (int x = 0; x < w; x++) {
-          int sx = srcX + ((long)x * srcW / w);
-          rowBuf[x] = photoBuf[sy * w + sx];
+          long sx = ((long)x * srcW * 256 / w) + srcX * 256;
+          int sx0 = sx >> 8; if (sx0 >= w - 1) sx0 = w - 2;
+          int fx = sx & 0xFF;
+          uint16_t p00 = photoBuf[sy0 * w + sx0];
+          uint16_t p01 = photoBuf[sy0 * w + sx0 + 1];
+          uint16_t p10 = photoBuf[(sy0 + 1) * w + sx0];
+          uint16_t p11 = photoBuf[(sy0 + 1) * w + sx0 + 1];
+          int r = (((p00 >> 11) * (256 - fx) + (p01 >> 11) * fx) * (256 - fy) +
+                   ((p10 >> 11) * (256 - fx) + (p11 >> 11) * fx) * fy) >> 16;
+          int g = ((((p00 >> 5) & 0x3F) * (256 - fx) + ((p01 >> 5) & 0x3F) * fx) * (256 - fy) +
+                   (((p10 >> 5) & 0x3F) * (256 - fx) + ((p11 >> 5) & 0x3F) * fx) * fy) >> 16;
+          int b = (((p00 & 0x1F) * (256 - fx) + (p01 & 0x1F) * fx) * (256 - fy) +
+                   ((p10 & 0x1F) * (256 - fx) + (p11 & 0x1F) * fx) * fy) >> 16;
+          rowBuf[x] = (r << 11) | (g << 5) | b;
         }
         gfx->draw16bitRGBBitmap(0, y, rowBuf, w, 1);
       }

@@ -1905,10 +1905,10 @@ void photo_view_start(int idx) {
     gfx->fillScreen(0x0000);
 
     if (photoZoomed) {
-      int srcX = w / 4;
-      int srcY = h / 4;
-      int srcW = w / 2;
-      int srcH = h / 2;
+      int srcW = w * 2 / 3;
+      int srcH = h * 2 / 3;
+      int srcX = (w - srcW) / 2;
+      int srcY = (h - srcH) / 2;
       uint16_t rowBuf[320];
       for (int y = 0; y < h; y++) {
         int sy = srcY + ((long)y * srcH / h);
@@ -1916,7 +1916,7 @@ void photo_view_start(int idx) {
           int sx = srcX + ((long)x * srcW / w);
           rowBuf[x] = photoBuf[sy * w + sx];
         }
-        gfx->draw16bitRGBBitmap(0, y, rowBuf, 1, w);
+        gfx->draw16bitRGBBitmap(0, y, rowBuf, w, 1);
       }
     } else {
       gfx->draw16bitRGBBitmap(0, 0, photoBuf, w, h);

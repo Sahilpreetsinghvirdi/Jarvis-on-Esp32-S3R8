@@ -49,8 +49,9 @@ static lv_color_t buf2[SCR_W * LV_BUF_LINES];
 static lv_disp_drv_t disp_drv;
 
 // ===== SCREENS =====
-enum ScreenID { SCR_WIFI_SELECT, SCR_SPLASH, SCR_MAIN, SCR_SETTINGS };
-static ScreenID currentScreen = SCR_WIFI_SELECT;
+enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT };
+static ScreenID currentScreen = SCR_DASHBOARD;
+static ScreenID previousScreen = SCR_DASHBOARD;
 
 // ===== UI OBJECTS - MAIN =====
 static lv_obj_t *scr_main = NULL;
@@ -75,8 +76,49 @@ int wifiRSSIs[MAX_WIFI];
 static lv_obj_t *scr_settings = NULL;
 static lv_obj_t *settings_list = NULL;
 static lv_obj_t *settings_title = NULL;
-#define SETTINGS_COUNT 5
+#define SETTINGS_COUNT 6
 static int settingsIdx = 0;
+
+// ===== UI OBJECTS - DASHBOARD =====
+static lv_obj_t *scr_dashboard = NULL;
+#define DASH_COUNT 3
+static lv_obj_t *dash_items[DASH_COUNT] = { NULL };
+static int dashIdx = 0;
+const char *dashLabels[DASH_COUNT] = { "JARVIS", "SD Card", "Settings" };
+
+// ===== UI OBJECTS - SD MENU =====
+static lv_obj_t *scr_sd_menu = NULL;
+#define SDMENU_COUNT 2
+static lv_obj_t *sdmenu_items[SDMENU_COUNT] = { NULL };
+static int sdmenuIdx = 0;
+const char *sdMenuLabels[SDMENU_COUNT] = { "Videos", "Photos" };
+
+// ===== UI OBJECTS - VIDEO LIST =====
+static lv_obj_t *scr_video_list = NULL;
+static lv_obj_t *video_list = NULL;
+static lv_obj_t *video_title = NULL;
+#define MAX_VIDEOS 20
+static lv_obj_t *video_items[MAX_VIDEOS] = { NULL };
+static String videoNames[MAX_VIDEOS];
+static String videoPaths[MAX_VIDEOS];
+static int videoCount = 0;
+static int videoIdx = 0;
+
+// ===== UI OBJECTS - PHOTO LIST =====
+static lv_obj_t *scr_photo_list = NULL;
+static lv_obj_t *photo_list = NULL;
+static lv_obj_t *photo_title = NULL;
+#define MAX_PHOTOS 100
+static lv_obj_t *photo_items[MAX_PHOTOS] = { NULL };
+static String photoFileNames[MAX_PHOTOS];
+static char photoOrientations[MAX_PHOTOS];
+static String photoDisplayNames[MAX_PHOTOS];
+static int photoCount = 0;
+static int photoIdx = 0;
+
+// ===== PHOTO VIEWER STATE =====
+static bool photoViewActive = false;
+static int currentPhotoIdx = 0;
 
 // ===== STYLES =====
 static lv_style_t style_user;
@@ -88,6 +130,16 @@ static lv_style_t style_wifi_selected;
 static lv_style_t style_settings_item;
 static lv_style_t style_settings_selected;
 static lv_style_t style_title;
+
+// ===== DASHBOARD STYLES =====
+static lv_style_t style_dash_item;
+static lv_style_t style_dash_selected;
+static lv_style_t style_sdmenu_item;
+static lv_style_t style_sdmenu_selected;
+
+// ===== SD CARD STATE =====
+static bool sdReady = false;
+static String currentVideoPath = "/MOVIE";
 
 // ===== CHAT =====
 #define MAX_LINES 20
@@ -475,6 +527,46 @@ void ui_init_styles() {
   lv_style_init(&style_title);
   lv_style_set_text_color(&style_title, lv_color_hex(0x60a5fa));
   lv_style_set_text_font(&style_title, &font_msg_14);
+
+  lv_style_init(&style_dash_item);
+  lv_style_set_bg_color(&style_dash_item, lv_color_hex(0x111827));
+  lv_style_set_bg_opa(&style_dash_item, LV_OPA_COVER);
+  lv_style_set_radius(&style_dash_item, 6);
+  lv_style_set_pad_all(&style_dash_item, 8);
+  lv_style_set_border_width(&style_dash_item, 1);
+  lv_style_set_border_color(&style_dash_item, lv_color_hex(0x1e3a5f));
+  lv_style_set_text_color(&style_dash_item, lv_color_hex(0x9ca3af));
+  lv_style_set_text_font(&style_dash_item, &font_msg_14);
+
+  lv_style_init(&style_dash_selected);
+  lv_style_set_bg_color(&style_dash_selected, lv_color_hex(0x1e3a5f));
+  lv_style_set_bg_opa(&style_dash_selected, LV_OPA_COVER);
+  lv_style_set_radius(&style_dash_selected, 6);
+  lv_style_set_pad_all(&style_dash_selected, 8);
+  lv_style_set_border_width(&style_dash_selected, 2);
+  lv_style_set_border_color(&style_dash_selected, lv_color_hex(0x22c55e));
+  lv_style_set_text_color(&style_dash_selected, lv_color_hex(0x22c55e));
+  lv_style_set_text_font(&style_dash_selected, &font_msg_14);
+
+  lv_style_init(&style_sdmenu_item);
+  lv_style_set_bg_color(&style_sdmenu_item, lv_color_hex(0x111827));
+  lv_style_set_bg_opa(&style_sdmenu_item, LV_OPA_COVER);
+  lv_style_set_radius(&style_sdmenu_item, 6);
+  lv_style_set_pad_all(&style_sdmenu_item, 8);
+  lv_style_set_border_width(&style_sdmenu_item, 1);
+  lv_style_set_border_color(&style_sdmenu_item, lv_color_hex(0x1e3a5f));
+  lv_style_set_text_color(&style_sdmenu_item, lv_color_hex(0x9ca3af));
+  lv_style_set_text_font(&style_sdmenu_item, &font_msg_14);
+
+  lv_style_init(&style_sdmenu_selected);
+  lv_style_set_bg_color(&style_sdmenu_selected, lv_color_hex(0x1e3a5f));
+  lv_style_set_bg_opa(&style_sdmenu_selected, LV_OPA_COVER);
+  lv_style_set_radius(&style_sdmenu_selected, 6);
+  lv_style_set_pad_all(&style_sdmenu_selected, 8);
+  lv_style_set_border_width(&style_sdmenu_selected, 2);
+  lv_style_set_border_color(&style_sdmenu_selected, lv_color_hex(0xfbbf24));
+  lv_style_set_text_color(&style_sdmenu_selected, lv_color_hex(0xfbbf24));
+  lv_style_set_text_font(&style_sdmenu_selected, &font_msg_14);
 }
 
 // ===== WIFI SELECT SCREEN =====
@@ -507,6 +599,355 @@ void ui_create_wifi_screen() {
   lv_obj_set_style_text_font(wifi_hint, &font_msg_12, 0);
   lv_obj_set_style_text_color(wifi_hint, lv_color_hex(0x6b7280), 0);
   lv_obj_align(wifi_hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+// ===== DASHBOARD SCREEN =====
+void ui_create_dashboard() {
+  scr_dashboard = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_dashboard, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(scr_dashboard, LV_OPA_COVER, 0);
+
+  lv_obj_t *title = lv_label_create(scr_dashboard);
+  lv_label_set_text(title, "J A R V I S");
+  lv_obj_set_style_text_font(title, &font_msg_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x60a5fa), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
+
+  lv_obj_t *line = lv_obj_create(scr_dashboard);
+  lv_obj_set_size(line, SCR_W - 40, 1);
+  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 32);
+  lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
+  lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *menu = lv_obj_create(scr_dashboard);
+  lv_obj_set_size(menu, SCR_W - 40, SCR_H - 70);
+  lv_obj_align(menu, LV_ALIGN_TOP_MID, 0, 40);
+  lv_obj_set_style_bg_opa(menu, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(menu, 0, 0);
+  lv_obj_set_style_pad_all(menu, 0, 0);
+  lv_obj_set_flex_flow(menu, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(menu, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_row(menu, 8, 0);
+
+  for (int i = 0; i < DASH_COUNT; i++) {
+    lv_obj_t *item = lv_obj_create(menu);
+    lv_obj_set_size(item, SCR_W - 50, 30);
+    lv_obj_set_height(item, 30);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(item);
+    lv_label_set_text(lbl, dashLabels[i]);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+
+    if (i == dashIdx) {
+      lv_obj_add_style(item, &style_dash_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x22c55e), 0);
+    } else {
+      lv_obj_add_style(item, &style_dash_item, 0);
+    }
+    dash_items[i] = item;
+  }
+
+  lv_obj_t *hint = lv_label_create(scr_dashboard);
+  lv_label_set_text(hint, "1tap=Enter | Hold=Down | 2Hold=Up | 2tap=Back");
+  lv_obj_set_style_text_font(hint, &font_msg_12, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+void updateDashboard() {
+  for (int i = 0; i < DASH_COUNT; i++) {
+    if (!dash_items[i]) continue;
+    lv_obj_t *lbl = lv_obj_get_child(dash_items[i], 0);
+    lv_obj_remove_style_all(dash_items[i]);
+    if (i == dashIdx) {
+      lv_obj_add_style(dash_items[i], &style_dash_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x22c55e), 0);
+    } else {
+      lv_obj_add_style(dash_items[i], &style_dash_item, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+    }
+  }
+}
+
+// ===== SD MENU SCREEN =====
+void ui_create_sd_menu() {
+  scr_sd_menu = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_sd_menu, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(scr_sd_menu, LV_OPA_COVER, 0);
+
+  lv_obj_t *title = lv_label_create(scr_sd_menu);
+  lv_label_set_text(title, ">> SD CARD");
+  lv_obj_set_style_text_font(title, &font_msg_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x60a5fa), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
+
+  lv_obj_t *menu = lv_obj_create(scr_sd_menu);
+  lv_obj_set_size(menu, SCR_W - 40, SCR_H - 70);
+  lv_obj_align(menu, LV_ALIGN_TOP_MID, 0, 40);
+  lv_obj_set_style_bg_opa(menu, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(menu, 0, 0);
+  lv_obj_set_style_pad_all(menu, 0, 0);
+  lv_obj_set_flex_flow(menu, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(menu, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_row(menu, 8, 0);
+
+  for (int i = 0; i < SDMENU_COUNT; i++) {
+    lv_obj_t *item = lv_obj_create(menu);
+    lv_obj_set_size(item, SCR_W - 50, 30);
+    lv_obj_set_height(item, 30);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(item);
+    lv_label_set_text(lbl, sdMenuLabels[i]);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+
+    if (i == sdmenuIdx) {
+      lv_obj_add_style(item, &style_sdmenu_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+    } else {
+      lv_obj_add_style(item, &style_sdmenu_item, 0);
+    }
+    sdmenu_items[i] = item;
+  }
+
+  lv_obj_t *hint = lv_label_create(scr_sd_menu);
+  lv_label_set_text(hint, "1tap=Enter | Hold=Down | 2Hold=Up | 2tap=Back");
+  lv_obj_set_style_text_font(hint, &font_msg_12, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+void updateSdMenu() {
+  for (int i = 0; i < SDMENU_COUNT; i++) {
+    if (!sdmenu_items[i]) continue;
+    lv_obj_t *lbl = lv_obj_get_child(sdmenu_items[i], 0);
+    lv_obj_remove_style_all(sdmenu_items[i]);
+    if (i == sdmenuIdx) {
+      lv_obj_add_style(sdmenu_items[i], &style_sdmenu_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+    } else {
+      lv_obj_add_style(sdmenu_items[i], &style_sdmenu_item, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+    }
+  }
+}
+
+// ===== VIDEO LIST SCREEN =====
+void sd_scan_videos() {
+  videoCount = 0;
+  if (sdReady) {
+    if (SD.exists("/MOVIE/meta.txt")) {
+      videoNames[videoCount] = "Movie";
+      videoPaths[videoCount] = "/MOVIE";
+      videoCount++;
+    }
+    File vDir = SD.open("/VIDEOS");
+    if (vDir && vDir.isDirectory()) {
+      File entry = vDir.openNextFile();
+      while (entry && videoCount < MAX_VIDEOS) {
+        if (entry.isDirectory()) {
+          String p = "/VIDEOS/" + String(entry.name());
+          if (SD.exists(p + "/meta.txt")) {
+            videoNames[videoCount] = String(entry.name());
+            videoPaths[videoCount] = p;
+            videoCount++;
+          }
+        }
+        entry = vDir.openNextFile();
+      }
+      vDir.close();
+    }
+  }
+  Serial.printf("[SD] Found %d video(s)\n", videoCount);
+}
+
+void ui_populate_video_list() {
+  lv_obj_clean(video_list);
+  for (int i = 0; i < MAX_VIDEOS; i++) video_items[i] = NULL;
+
+  if (videoCount == 0) {
+    lv_label_set_text(video_title, ">> NO VIDEOS FOUND");
+    return;
+  }
+  lv_label_set_text_fmt(video_title, ">> %d VIDEO(S)", videoCount);
+
+  for (int i = 0; i < videoCount; i++) {
+    lv_obj_t *item = lv_obj_create(video_list);
+    lv_obj_set_size(item, SCR_W - 16, 26);
+    lv_obj_set_height(item, 26);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(item);
+    lv_label_set_text_fmt(lbl, "> %s", videoNames[i].c_str());
+    lv_obj_set_style_text_font(lbl, &font_msg_14, 0);
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
+
+    if (i == videoIdx) {
+      lv_obj_add_style(item, &style_sdmenu_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+    } else {
+      lv_obj_add_style(item, &style_sdmenu_item, 0);
+    }
+    video_items[i] = item;
+  }
+}
+
+void ui_create_video_list() {
+  scr_video_list = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_video_list, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(scr_video_list, LV_OPA_COVER, 0);
+
+  video_title = lv_label_create(scr_video_list);
+  lv_label_set_text(video_title, ">> VIDEOS");
+  lv_obj_set_style_text_font(video_title, &font_msg_14, 0);
+  lv_obj_set_style_text_color(video_title, lv_color_hex(0x60a5fa), 0);
+  lv_obj_align(video_title, LV_ALIGN_TOP_MID, 0, 6);
+
+  video_list = lv_obj_create(scr_video_list);
+  lv_obj_set_size(video_list, SCR_W - 8, SCR_H - 50);
+  lv_obj_align(video_list, LV_ALIGN_TOP_MID, 0, 26);
+  lv_obj_set_style_bg_color(video_list, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(video_list, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(video_list, 0, 0);
+  lv_obj_set_style_pad_all(video_list, 2, 0);
+  lv_obj_set_flex_flow(video_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(video_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+  lv_obj_set_style_pad_row(video_list, 3, 0);
+
+  lv_obj_t *hint = lv_label_create(scr_video_list);
+  lv_label_set_text(hint, "1tap=Play | Hold=Scroll | 2tap=Back");
+  lv_obj_set_style_text_font(hint, &font_msg_12, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+void updateVideoListSelection() {
+  for (int i = 0; i < videoCount; i++) {
+    if (!video_items[i]) continue;
+    lv_obj_t *lbl = lv_obj_get_child(video_items[i], 0);
+    lv_obj_remove_style_all(video_items[i]);
+    if (i == videoIdx) {
+      lv_obj_add_style(video_items[i], &style_sdmenu_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+    } else {
+      lv_obj_add_style(video_items[i], &style_sdmenu_item, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+    }
+  }
+}
+
+// ===== PHOTO LIST SCREEN =====
+void sd_scan_photos() {
+  photoCount = 0;
+  if (!sdReady) return;
+  File meta = SD.open("/PHOTOS/meta.txt", FILE_READ);
+  if (!meta) {
+    Serial.println("[SD] No /PHOTOS/meta.txt found");
+    return;
+  }
+  String countStr = meta.readStringUntil('\n');
+  photoCount = countStr.toInt();
+  if (photoCount > MAX_PHOTOS) photoCount = MAX_PHOTOS;
+  for (int i = 0; i < photoCount; i++) {
+    String line = meta.readStringUntil('\n');
+    line.trim();
+    int sp1 = line.indexOf(' ');
+    if (sp1 > 0) {
+      photoFileNames[i] = line.substring(0, sp1);
+      String rest = line.substring(sp1 + 1);
+      int sp2 = rest.indexOf(' ');
+      if (sp2 > 0) {
+        photoOrientations[i] = rest.charAt(0);
+        photoDisplayNames[i] = rest.substring(sp2 + 1);
+      } else {
+        photoOrientations[i] = rest.charAt(0);
+        photoDisplayNames[i] = photoFileNames[i];
+      }
+    }
+  }
+  meta.close();
+  Serial.printf("[SD] Found %d photo(s)\n", photoCount);
+}
+
+void ui_populate_photo_list() {
+  lv_obj_clean(photo_list);
+  for (int i = 0; i < MAX_PHOTOS; i++) photo_items[i] = NULL;
+
+  if (photoCount == 0) {
+    lv_label_set_text(photo_title, ">> NO PHOTOS FOUND");
+    return;
+  }
+  lv_label_set_text_fmt(photo_title, ">> %d PHOTOS", photoCount);
+
+  for (int i = 0; i < photoCount; i++) {
+    lv_obj_t *item = lv_obj_create(photo_list);
+    lv_obj_set_size(item, SCR_W - 16, 22);
+    lv_obj_set_height(item, 22);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(item);
+    const char *orient = (photoOrientations[i] == 'P') ? "[P] " : "[L] ";
+    String dispName = photoDisplayNames[i];
+    if (dispName.length() > 28) dispName = dispName.substring(0, 28) + "...";
+    lv_label_set_text_fmt(lbl, "%s%s", orient, dispName.c_str());
+    lv_obj_set_style_text_font(lbl, &font_msg_12, 0);
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
+
+    if (i == photoIdx) {
+      lv_obj_add_style(item, &style_sdmenu_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+    } else {
+      lv_obj_add_style(item, &style_sdmenu_item, 0);
+    }
+    photo_items[i] = item;
+  }
+}
+
+void ui_create_photo_list() {
+  scr_photo_list = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_photo_list, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(scr_photo_list, LV_OPA_COVER, 0);
+
+  photo_title = lv_label_create(scr_photo_list);
+  lv_label_set_text(photo_title, ">> PHOTOS");
+  lv_obj_set_style_text_font(photo_title, &font_msg_14, 0);
+  lv_obj_set_style_text_color(photo_title, lv_color_hex(0x60a5fa), 0);
+  lv_obj_align(photo_title, LV_ALIGN_TOP_MID, 0, 6);
+
+  photo_list = lv_obj_create(scr_photo_list);
+  lv_obj_set_size(photo_list, SCR_W - 8, SCR_H - 50);
+  lv_obj_align(photo_list, LV_ALIGN_TOP_MID, 0, 26);
+  lv_obj_set_style_bg_color(photo_list, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(photo_list, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(photo_list, 0, 0);
+  lv_obj_set_style_pad_all(photo_list, 2, 0);
+  lv_obj_set_flex_flow(photo_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(photo_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+  lv_obj_set_style_pad_row(photo_list, 2, 0);
+
+  lv_obj_t *hint = lv_label_create(scr_photo_list);
+  lv_label_set_text(hint, "1tap=View | Hold=Scroll | 2tap=Back");
+  lv_obj_set_style_text_font(hint, &font_msg_12, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+void updatePhotoListSelection() {
+  for (int i = 0; i < photoCount; i++) {
+    if (!photo_items[i]) continue;
+    lv_obj_t *lbl = lv_obj_get_child(photo_items[i], 0);
+    lv_obj_remove_style_all(photo_items[i]);
+    if (i == photoIdx) {
+      lv_obj_add_style(photo_items[i], &style_sdmenu_selected, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+    } else {
+      lv_obj_add_style(photo_items[i], &style_sdmenu_item, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+    }
+  }
 }
 
 void scanWiFiAndPopulate() {
@@ -625,8 +1066,9 @@ const char *settingsLabels[SETTINGS_COUNT] = {
   "WiFi Network",
   "Brightness",
   "LED Toggle",
+  "Auto Rotate",
   "About JARVIS",
-  "Back to Chat"
+  "< Back"
 };
 
 void ui_create_settings() {
@@ -694,10 +1136,12 @@ void updateSettingsDisplay() {
 
   lv_label_set_text(settings_values[2], ledEnabled ? "ON" : "OFF");
 
-  snprintf(buf, sizeof(buf), "v1.0");
-  lv_label_set_text(settings_values[3], buf);
+  lv_label_set_text(settings_values[3], autoRotateEnabled ? "ON" : "OFF");
 
-  lv_label_set_text(settings_values[4], "<");
+  snprintf(buf, sizeof(buf), "v1.0");
+  lv_label_set_text(settings_values[4], buf);
+
+  lv_label_set_text(settings_values[5], "");
 
   for (int i = 0; i < SETTINGS_COUNT; i++) {
     if (!settings_items[i]) continue;
@@ -715,23 +1159,58 @@ void updateSettingsDisplay() {
 
 // ===== CHAT DISPLAY =====
 void switchToScreen(ScreenID id) {
+  previousScreen = currentScreen;
   currentScreen = id;
   switch (id) {
-    case SCR_WIFI_SELECT:
-      lv_scr_load(scr_wifi);
-      scanWiFiAndPopulate();
+    case SCR_DASHBOARD:
+      dashIdx = 0;
+      updateDashboard();
+      lv_scr_load(scr_dashboard);
       break;
-    case SCR_MAIN:
+    case SCR_JARVIS:
       lv_scr_load(scr_main);
+      break;
+    case SCR_SD_MENU:
+      sdmenuIdx = 0;
+      updateSdMenu();
+      lv_scr_load(scr_sd_menu);
+      break;
+    case SCR_VIDEO_LIST:
+      videoIdx = 0;
+      sd_scan_videos();
+      ui_populate_video_list();
+      lv_scr_load(scr_video_list);
+      break;
+    case SCR_PHOTO_LIST:
+      photoIdx = 0;
+      sd_scan_photos();
+      ui_populate_photo_list();
+      lv_scr_load(scr_photo_list);
+      break;
+    case SCR_PHOTO_VIEW:
       break;
     case SCR_SETTINGS:
       settingsIdx = 0;
       updateSettingsDisplay();
       lv_scr_load(scr_settings);
       break;
-    case SCR_SPLASH:
-      lv_scr_load(scr_main);
+    case SCR_WIFI_SELECT:
+      lv_scr_load(scr_wifi);
+      scanWiFiAndPopulate();
       break;
+  }
+}
+
+void goBack() {
+  switch (currentScreen) {
+    case SCR_DASHBOARD: break;
+    case SCR_JARVIS: switchToScreen(SCR_DASHBOARD); break;
+    case SCR_SD_MENU: switchToScreen(SCR_DASHBOARD); break;
+    case SCR_VIDEO_LIST: switchToScreen(SCR_SD_MENU); break;
+    case SCR_PHOTO_LIST: switchToScreen(SCR_SD_MENU); break;
+    case SCR_PHOTO_VIEW: photo_view_stop(); break;
+    case SCR_SETTINGS: switchToScreen(SCR_DASHBOARD); break;
+    case SCR_WIFI_SELECT: switchToScreen(SCR_SETTINGS); break;
   }
 }
 
@@ -929,31 +1408,61 @@ void handleButton() {
       lastPressTime = now;
     } else {
       unsigned long holdTime = now - btnPressTime;
-      if (holdTime >= 500 && pressCount == 1) {
-        if (currentScreen == SCR_MAIN) lv_obj_scroll_by(msg_list, 0, 40, LV_ANIM_ON);
-        else if (currentScreen == SCR_WIFI_SELECT) { wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection(); }
-        else if (currentScreen == SCR_SETTINGS) { settingsIdx++; if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0; updateSettingsDisplay(); }
-      } else if (holdTime >= 500 && pressCount >= 2) {
-        if (currentScreen == SCR_MAIN) lv_obj_scroll_by(msg_list, 0, -40, LV_ANIM_ON);
-        else if (currentScreen == SCR_WIFI_SELECT) { wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection(); }
-        else if (currentScreen == SCR_SETTINGS) { settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay(); }
-      } else if (holdTime < 300 && pressCount == 1) {
-        if (movieMode != MOVIE_OFF) {
-          movie_toggle_pause();
-          pressCount = 0;
-        }
-      } else if (holdTime < 300 && pressCount >= 3) {
-        if (movieMode != MOVIE_OFF) {
-          if (movieMode == MOVIE_WIFI) movie_wifi_stop();
-          else movie_sd_stop();
-          pressCount = 0;
-        } else if (currentScreen == SCR_MAIN) switchToScreen(SCR_SETTINGS);
-        else if (currentScreen == SCR_SETTINGS) {
+      if (holdTime < 400 && pressCount == 1) {
+        if (photoViewActive) {
+          // Single click in photo view: nothing for now (future zoom)
+        } else if (currentScreen == SCR_DASHBOARD) {
+          switch (dashIdx) {
+            case 0: switchToScreen(SCR_JARVIS); break;
+            case 1: switchToScreen(SCR_SD_MENU); break;
+            case 2: switchToScreen(SCR_SETTINGS); break;
+          }
+        } else if (currentScreen == SCR_SD_MENU) {
+          switch (sdmenuIdx) {
+            case 0: switchToScreen(SCR_VIDEO_LIST); break;
+            case 1: switchToScreen(SCR_PHOTO_LIST); break;
+          }
+        } else if (currentScreen == SCR_VIDEO_LIST) {
+          if (videoCount > 0 && videoIdx < videoCount) {
+            currentVideoPath = videoPaths[videoIdx];
+            if (movieMode != MOVIE_OFF) movie_sd_stop();
+            movie_sd_start();
+          }
+        } else if (currentScreen == SCR_PHOTO_LIST) {
+          if (photoCount > 0 && photoIdx < photoCount) {
+            movieDisplayActive = true;
+            currentScreen = SCR_PHOTO_VIEW;
+            photo_view_start(photoIdx);
+          }
+        } else if (currentScreen == SCR_JARVIS) {
+          // Single click on chat: nothing (scroll is on hold)
+        } else if (currentScreen == SCR_SETTINGS) {
           switch (settingsIdx) {
             case 0: switchToScreen(SCR_WIFI_SELECT); break;
             case 2: ledEnabled = !ledEnabled; if (!ledEnabled) rgb_off(); else rgb_cyan(); updateSettingsDisplay(); break;
-            case 4: switchToScreen(SCR_MAIN); break;
+            case 3: autoRotateEnabled = !autoRotateEnabled; updateSettingsDisplay(); break;
+            case 5: switchToScreen(SCR_DASHBOARD); break;
           }
+        } else if (currentScreen == SCR_WIFI_SELECT) {
+          if (wifiCount > 0) {
+            String ssid = wifiSSIDs[wifiSelectedIdx];
+            WiFi.disconnect();
+            WiFi.begin(ssid.c_str(), "");
+            add_sys_msg(("Connecting to " + ssid + "...").c_str());
+            wifiConnecting = true;
+            wifiStartMs = millis();
+            switchToScreen(SCR_JARVIS);
+          }
+        }
+        pressCount = 0;
+      } else if (holdTime < 400 && pressCount >= 2) {
+        if (photoViewActive) {
+          photo_view_stop();
+        } else if (movieMode != MOVIE_OFF) {
+          if (movieMode == MOVIE_WIFI) movie_wifi_stop();
+          else movie_sd_stop();
+        } else {
+          goBack();
         }
         pressCount = 0;
       }
@@ -961,27 +1470,42 @@ void handleButton() {
     }
   }
 
-  if (btnState == LOW && (now - btnPressTime > 500)) {
+  if (btnState == LOW && (now - btnPressTime > 400)) {
     if (!btnHeld) {
       btnHeld = true;
       lastScrollTime = 0;
     }
-    if (now - lastScrollTime > 60) {
+    if (now - lastScrollTime > 100) {
       lastScrollTime = now;
-      if (currentScreen == SCR_MAIN) {
-        if (pressCount == 1) lv_obj_scroll_by(msg_list, 0, 15, LV_ANIM_ON);
-        else if (pressCount >= 2) lv_obj_scroll_by(msg_list, 0, -15, LV_ANIM_ON);
-      } else if (currentScreen == SCR_WIFI_SELECT) {
-        if (pressCount == 1) { wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection(); }
-        else if (pressCount >= 2) { wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection(); }
+      if (photoViewActive) {
+        if (pressCount == 1) photo_view_next();
+        else if (pressCount >= 2) photo_view_prev();
+      } else if (currentScreen == SCR_JARVIS) {
+        if (pressCount == 1) lv_obj_scroll_by(msg_list, 0, 40, LV_ANIM_ON);
+        else if (pressCount >= 2) lv_obj_scroll_by(msg_list, 0, -40, LV_ANIM_ON);
+      } else if (currentScreen == SCR_DASHBOARD) {
+        if (pressCount == 1) { dashIdx++; if (dashIdx >= DASH_COUNT) dashIdx = 0; updateDashboard(); }
+        else if (pressCount >= 2) { dashIdx--; if (dashIdx < 0) dashIdx = DASH_COUNT - 1; updateDashboard(); }
+      } else if (currentScreen == SCR_SD_MENU) {
+        if (pressCount == 1) { sdmenuIdx++; if (sdmenuIdx >= SDMENU_COUNT) sdmenuIdx = 0; updateSdMenu(); }
+        else if (pressCount >= 2) { sdmenuIdx--; if (sdmenuIdx < 0) sdmenuIdx = SDMENU_COUNT - 1; updateSdMenu(); }
+      } else if (currentScreen == SCR_VIDEO_LIST) {
+        if (pressCount == 1) { videoIdx++; if (videoIdx >= videoCount) videoIdx = 0; updateVideoListSelection(); }
+        else if (pressCount >= 2) { videoIdx--; if (videoIdx < 0) videoIdx = videoCount - 1; updateVideoListSelection(); }
+      } else if (currentScreen == SCR_PHOTO_LIST) {
+        if (pressCount == 1) { photoIdx++; if (photoIdx >= photoCount) photoIdx = 0; updatePhotoListSelection(); }
+        else if (pressCount >= 2) { photoIdx--; if (photoIdx < 0) photoIdx = photoCount - 1; updatePhotoListSelection(); }
       } else if (currentScreen == SCR_SETTINGS) {
         if (pressCount == 1) { settingsIdx++; if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0; updateSettingsDisplay(); }
         else if (pressCount >= 2) { settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay(); }
+      } else if (currentScreen == SCR_WIFI_SELECT) {
+        if (pressCount == 1) { wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection(); }
+        else if (pressCount >= 2) { wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection(); }
       }
     }
   }
 
-  if (now - lastPressTime > 1000 && pressCount > 0) pressCount = 0;
+  if (now - lastPressTime > 600 && pressCount > 0) pressCount = 0;
   lastBtnState = reading;
   btnState = reading;
 }
@@ -1053,7 +1577,7 @@ void movie_show_ui() {
 }
 
 void movie_hide_ui() {
-  currentScreen = SCR_MAIN;
+  currentScreen = SCR_JARVIS;
   lv_scr_load(scr_main);
 }
 
@@ -1101,8 +1625,8 @@ void movie_wifi_stop() {
   autoRotateEnabled = true;
   movie_free_buffers();
   rgb_off();
-  lv_scr_load(scr_main);
   lv_refr_now(NULL);
+  switchToScreen(previousScreen);
   add_sys_msg("Movie mode OFF.");
 }
 
@@ -1113,18 +1637,21 @@ void movie_sd_start() {
   }
 
   sdSPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
-  if (!SD.begin(SD_CS, sdSPI, 40000000)) {
+  if (!sdReady) {
+    sdReady = SD.begin(SD_CS, sdSPI, 40000000);
+  }
+  if (!sdReady) {
     add_sys_msg("! SD card not found.");
     Serial.println("[MOVIE] SD init failed");
     movie_free_buffers();
     return;
   }
 
-  File meta = SD.open("/MOVIE/meta.txt", FILE_READ);
+  String metaPath = currentVideoPath + "/meta.txt";
+  File meta = SD.open(metaPath.c_str(), FILE_READ);
   if (!meta) {
-    add_sys_msg("! No /MOVIE/meta.txt on SD. Run Python preprocessor first.");
+    add_sys_msg(("! No " + metaPath + " on SD").c_str());
     Serial.println("[MOVIE] meta.txt not found");
-    SD.end();
     movie_free_buffers();
     return;
   }
@@ -1172,14 +1699,13 @@ void movie_sd_start() {
 
 void movie_sd_stop() {
   if (sdMovieFile) sdMovieFile.close();
-  SD.end();
   movieMode = MOVIE_OFF;
   movieDisplayActive = false;
   autoRotateEnabled = true;
   movie_free_buffers();
   rgb_off();
-  lv_scr_load(scr_main);
   lv_refr_now(NULL);
+  switchToScreen(previousScreen);
   add_sys_msg("Movie mode OFF.");
 }
 
@@ -1285,8 +1811,8 @@ void movie_wifi_tick() {
 }
 
 bool movie_sd_open_frame(uint32_t idx, uint16_t *buf) {
-  char path[32];
-  snprintf(path, sizeof(path), "/MOVIE/frames/%06d.rgb", idx);
+  char path[64];
+  snprintf(path, sizeof(path), "%s/frames/%06d.rgb", currentVideoPath.c_str(), idx);
   sdMovieFile = SD.open(path, FILE_READ);
   if (!sdMovieFile) return false;
   sdMovieFile.read((uint8_t *)buf, SD_W * SD_H * 2);
@@ -1333,6 +1859,75 @@ void movie_tick() {
   else if (movieMode == MOVIE_SD) movie_sd_tick();
 }
 
+// ===== PHOTO VIEWER =====
+#define PHOTO_BUF_SIZE (320 * 172 * 2)
+static uint16_t *photoBuf = NULL;
+
+void photo_view_start(int idx) {
+  if (idx < 0 || idx >= photoCount) return;
+  currentPhotoIdx = idx;
+  photoViewActive = true;
+  autoRotateEnabled = false;
+
+  if (!sdReady) { photoViewActive = false; return; }
+  if (!photoBuf) {
+    photoBuf = (uint16_t *)ps_malloc(PHOTO_BUF_SIZE);
+    if (!photoBuf) { Serial.println("[PHOTO] Failed to alloc buffer"); photoViewActive = false; return; }
+  }
+
+  char orient = photoOrientations[idx];
+  int w = (orient == 'P') ? 172 : 320;
+  int h = (orient == 'P') ? 320 : 172;
+
+  if (orient == 'P') gfx->setRotation(0);
+  else gfx->setRotation(1);
+
+  String path = "/PHOTOS/" + photoFileNames[idx];
+  File f = SD.open(path.c_str(), FILE_READ);
+  if (f) {
+    f.read((uint8_t *)photoBuf, w * h * 2);
+    f.close();
+    gfx->fillScreen(0x0000);
+    gfx->draw16bitRGBBitmap(0, 0, photoBuf, w, h);
+
+    gfx->setTextColor(0xFFFF, 0x0000);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, 2);
+    String label = String(idx + 1) + "/" + String(photoCount);
+    gfx->print(label.c_str());
+
+    if (photoDisplayNames[idx].length() > 0) {
+      gfx->setCursor(4, h > 200 ? h - 14 : h - 14);
+      gfx->print(photoDisplayNames[idx].c_str());
+    }
+  } else {
+    Serial.printf("[PHOTO] Cannot open %s\n", path.c_str());
+    gfx->fillScreen(0x0000);
+    gfx->setTextColor(0xF800, 0x0000);
+    gfx->setCursor(20, 80);
+    gfx->print("File not found");
+  }
+}
+
+void photo_view_stop() {
+  photoViewActive = false;
+  gfx->setRotation(1);
+  movieDisplayActive = false;
+  autoRotateEnabled = true;
+  lv_refr_now(NULL);
+  switchToScreen(SCR_PHOTO_LIST);
+}
+
+void photo_view_next() {
+  if (currentPhotoIdx < photoCount - 1) photo_view_start(currentPhotoIdx + 1);
+  else photo_view_start(0);
+}
+
+void photo_view_prev() {
+  if (currentPhotoIdx > 0) photo_view_start(currentPhotoIdx - 1);
+  else photo_view_start(photoCount - 1);
+}
+
 // ===== INPUT =====
 String serialInput = "";
 bool lastInputWasBT = false;
@@ -1372,6 +1967,10 @@ void processInput(const String &input, bool fromBT) {
     switchToScreen(SCR_WIFI_SELECT);
   } else if (cmd == "!settings") {
     switchToScreen(SCR_SETTINGS);
+  } else if (cmd == "!dash") {
+    switchToScreen(SCR_DASHBOARD);
+  } else if (cmd == "!sd") {
+    switchToScreen(SCR_SD_MENU);
   } else if (cmd == "!net") {
     String msg = "Telnet: " + WiFi.localIP().toString() + ":23 | Client: " + String(telnetConnected ? "Yes" : "No");
     add_sys_msg(msg.c_str());
@@ -1390,7 +1989,7 @@ void processInput(const String &input, bool fromBT) {
   } else if (cmd == "!movie pause") {
     movie_toggle_pause();
   } else if (cmd == "!help") {
-    String msg = "Commands: !clear !wifi !settings !bright <0-100> !net !rotate !imu\nMovie: !movie wifi|sd|stop|pause";
+    String msg = "Commands: !clear !dash !sd !wifi !settings !bright <0-100> !net !rotate !imu\nMovie: !movie wifi|sd|stop|pause";
     add_sys_msg(msg.c_str());
     reply("[JARVIS] " + msg);
   } else if (cmd.startsWith("!bright ")) {
@@ -1400,7 +1999,7 @@ void processInput(const String &input, bool fromBT) {
       add_sys_msg(("Brightness: " + String(val) + "%").c_str());
     }
   } else {
-    if (currentScreen != SCR_MAIN) switchToScreen(SCR_MAIN);
+    if (currentScreen != SCR_JARVIS) switchToScreen(SCR_JARVIS);
     add_user_msg(cmd.c_str());
     lv_label_set_text(input_label, ("> " + cmd).c_str());
     sendToGroq(cmd);
@@ -1486,16 +2085,28 @@ void setup() {
   ui_create_wifi_screen();
   ui_create();
   ui_create_settings();
+  ui_create_dashboard();
+  ui_create_sd_menu();
+  ui_create_video_list();
+  ui_create_photo_list();
 
   showSplash();
 
-  currentScreen = SCR_MAIN;
-  lv_scr_load(scr_main);
-  lv_refr_now(NULL);
+  Serial.println("[BOOT] Initializing SD card...");
+  sdSPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+  sdReady = SD.begin(SD_CS, sdSPI, 40000000);
+  Serial.printf("[BOOT] SD card: %s\n", sdReady ? "OK" : "NOT FOUND");
+  if (sdReady) {
+    sd_scan_videos();
+    sd_scan_photos();
+    Serial.printf("[BOOT] SD: %d video(s), %d photo(s)\n", videoCount, photoCount);
+  }
 
-  add_sys_msg("JARVIS v1.0 online.");
-  add_sys_msg("Connecting to WiFi...");
-  lv_label_set_text(input_label, "Connecting...");
+  currentScreen = SCR_DASHBOARD;
+  dashIdx = 0;
+  updateDashboard();
+  lv_scr_load(scr_dashboard);
+  lv_refr_now(NULL);
 
   Serial.println("[JARVIS] Starting WiFi...");
   WiFi.mode(WIFI_STA);
@@ -1503,56 +2114,9 @@ void setup() {
   wifiConnecting = true;
   wifiStartMs = millis();
 
-  Serial.println("[JARVIS] Ready. Type messages below.");
+  Serial.println("[JARVIS] Ready.");
   Serial.println("Commands: !clear !wifi !settings !bright <0-100> !net !rotate");
   Serial.println("Telnet: After WiFi connects, run: telnet <esp-ip> 23");
-
-  Serial.println("[BOOT] Trying SD card auto-play...");
-  if (movie_alloc_buffers()) {
-    delay(500);
-    sdSPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
-    bool sdOk = SD.begin(SD_CS, sdSPI, 40000000);
-    Serial.printf("[BOOT] SD.begin(CS=%d) = %s\n", SD_CS, sdOk ? "OK" : "FAIL");
-    if (sdOk) {
-      File meta = SD.open("/MOVIE/meta.txt", FILE_READ);
-      Serial.printf("[BOOT] meta.txt = %s\n", meta ? "FOUND" : "NOT FOUND");
-        if (meta) {
-        String metaStr = meta.readString();
-        meta.close();
-        Serial.printf("[BOOT] meta.txt content: %s\n", metaStr.c_str());
-        int w, h, totalFrames;
-        float fps;
-        if (sscanf(metaStr.c_str(), "%d %d %d %f", &w, &h, &totalFrames, &fps) == 4) {
-          movieTotalFrames = totalFrames;
-          movieFrameMs = (unsigned long)(1000.0 / fps);
-          movieFrameIdx = 0;
-          movieFpsCount = 0;
-          movieFpsLastTime = millis();
-          movieMode = MOVIE_SD;
-          moviePaused = false;
-          autoRotateEnabled = false;
-          movieDisplayActive = true;
-          gfx->setRotation(1);
-          gfx->fillScreen(0x0000);
-          if (movie_sd_open_frame(0, sdBufA)) {
-            gfx->draw16bitRGBBitmap(0, 0, sdBufA, SD_W, SD_H);
-            sdUseA = true;
-            if (movie_sd_open_frame(1, sdBufB)) {
-              sdUseA = false;
-              sdPreloaded = true;
-              movieFrameIdx = 1;
-            }
-          }
-          Serial.printf("[BOOT] SD movie: %d frames @ %.1f fps\n", totalFrames, fps);
-          rgb_green();
-          return;
-        }
-      }
-      SD.end();
-    }
-    movie_free_buffers();
-  }
-  Serial.println("[BOOT] No SD movie found, starting normal UI.");
 }
 
 // ===== LOOP =====
@@ -1561,33 +2125,29 @@ void loop() {
   handleInput();
   check_auto_rotation();
   telnet_handle();
-  lv_timer_handler();
+  if (!photoViewActive && movieMode == MOVIE_OFF) lv_timer_handler();
   movie_tick();
 
   if (wifiConnecting) {
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnecting = false;
-      lv_label_set_text_fmt(lbl_wifi, "WiFi: %s", WiFi.localIP().toString().c_str());
-      lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
+      if (currentScreen == SCR_JARVIS) {
+        lv_label_set_text_fmt(lbl_wifi, "WiFi: %s", WiFi.localIP().toString().c_str());
+        lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
+        lv_label_set_text(input_label, "Type a message...");
+      }
       rgb_green(); delay(300); rgb_off();
       add_sys_msg(("WiFi connected: " + WiFi.localIP().toString()).c_str());
       add_sys_msg("Telnet: open terminal -> telnet <ip> 23");
-      lv_label_set_text(input_label, "Type a message...");
       Serial.println("[JARVIS] WiFi connected: " + WiFi.localIP().toString());
       telnet_init();
     } else if (millis() - wifiStartMs > WIFI_TIMEOUT_MS) {
       wifiConnecting = false;
-      lv_label_set_text(lbl_wifi, "WiFi: Failed");
-      lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xef4444), 0);
-      add_sys_msg("! WiFi connect failed. Use button to scan.");
-      lv_label_set_text(input_label, "Use button to scan WiFi");
-      Serial.println("[JARVIS] WiFi connection timed out.");
-    } else {
-      static unsigned long lastBlink = 0;
-      if (millis() - lastBlink > 500) {
-        lastBlink = millis();
-        lv_label_set_text(input_label, "Connecting...");
+      if (currentScreen == SCR_JARVIS) {
+        lv_label_set_text(lbl_wifi, "WiFi: Failed");
+        lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xef4444), 0);
       }
+      Serial.println("[JARVIS] WiFi connection timed out.");
     }
   }
 

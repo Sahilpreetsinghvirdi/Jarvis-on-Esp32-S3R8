@@ -2174,9 +2174,9 @@ void handleButton() {
               photo_view_start(currentPhotoIdx);
             }
           } else if (zoomHoldActive && now - zoomHoldStart >= 1000) {
-            if (now - lastScrollTime >= 50) {
+            if (now - lastScrollTime >= 40) {
               lastScrollTime = now;
-              photoZoomLevel += 0.02f;
+              photoZoomLevel += 0.05f;
               if (photoZoomLevel > 4.0f) photoZoomLevel = 4.0f;
               photo_view_start(currentPhotoIdx);
             }
@@ -2206,10 +2206,60 @@ void showSplash() {
 
   lv_obj_t *logo_img = lv_image_create(scr_splash);
   lv_image_set_src(logo_img, &espressif_logo);
-  lv_obj_align(logo_img, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_align(logo_img, LV_ALIGN_CENTER, 0, -20);
+
+  lv_obj_t *name_label = lv_label_create(scr_splash);
+  lv_label_set_text(name_label, "Sahil Virdi");
+  lv_obj_set_style_text_color(name_label, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_text_font(name_label, &lv_font_montserrat_20, 0);
+  lv_obj_align(name_label, LV_ALIGN_CENTER, 0, 40);
+  lv_obj_set_style_opa(name_label, LV_OPA_TRANSP, 0);
 
   lv_refr_now(NULL);
-  delay(3000);
+
+  lv_anim_t a;
+  // Logo: fade in, hold, fade out (total ~1600ms)
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, logo_img);
+  lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+  lv_anim_set_time(&a, 400);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+  lv_anim_start(&a);
+
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, logo_img);
+  lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+  lv_anim_set_time(&a, 400);
+  lv_anim_set_delay(&a, 1200);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_start(&a);
+
+  // Name: fade in after logo fades out, hold, fade out
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, name_label);
+  lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+  lv_anim_set_time(&a, 400);
+  lv_anim_set_delay(&a, 1600);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+  lv_anim_start(&a);
+
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, name_label);
+  lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+  lv_anim_set_time(&a, 400);
+  lv_anim_set_delay(&a, 2800);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_start(&a);
+
+  unsigned long splashStart = millis();
+  while (millis() - splashStart < 3200) {
+    lv_timer_handler();
+    delay(10);
+  }
 }
 
 // ===== WIFI CONNECT STATE (redeclared for access) =====

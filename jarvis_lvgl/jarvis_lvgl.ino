@@ -155,6 +155,7 @@ static uint16_t *sdBufA = NULL;
 static uint16_t *sdBufB = NULL;
 static bool sdPreloaded = false;
 static bool sdUseA = true;
+static File sdMovieFile;
 static WiFiUDP udp;
 static bool *chunkReceived = NULL;
 static uint32_t currentFrameId = 0;
@@ -865,18 +866,9 @@ void sendToGroq(String query) {
             int tokLen = strlen(token);
             if ((int)streamBuffer.length() + tokLen < MAX_RESPONSE_LEN) {
               streamBuffer += token;
-    }
-  } else {
-    if (millis() - movieNoPacketTime > 3000 && movieFrameIdx == 0) {
-      static unsigned long lastWarn = 0;
-      if (millis() - lastWarn > 5000) {
-        lastWarn = millis();
-        Serial.printf("[MOVIE] No packets received for 3s! Check: laptop & ESP32 on same WiFi? Send to %s:%d\n",
-                      WiFi.localIP().toString().c_str(), UDP_PORT);
-      }
-    }
-  }
-}
+            }
+          }
+        }
         streamLineLen = 0;
       } else if (streamLineLen < 511) {
         streamLineBuf[streamLineLen++] = c;
@@ -1026,6 +1018,7 @@ bool movie_alloc_buffers() {
 }
 
 void movie_free_buffers() {
+  if (sdMovieFile) sdMovieFile.close();
   free(frameBuf); frameBuf = NULL;
   free(frameBuf2); frameBuf2 = NULL;
   free(scaledBuf); scaledBuf = NULL;
@@ -1169,10 +1162,16 @@ void movie_sd_start() {
   movieDisplayActive = true;
   add_sys_msg(("SD movie: " + String(totalFrames) + " frames @ " + String(fps, 1) + "fps").c_str());
   Serial.printf("[MOVIE] SD movie: %d frames, %dfps, %dms/frame\n", totalFrames, (int)fps, movieFrameMs);
+
+  movie_sd_open_frame(movieFrameIdx, sdBufA);
+  sdUseA = true;
+  sdPreloaded = false;
+
   rgb_green();
 }
 
 void movie_sd_stop() {
+  if (sdMovieFile) sdMovieFile.close();
   SD.end();
   movieMode = MOVIE_OFF;
   movieDisplayActive = false;
@@ -1215,12 +1214,11 @@ void movie_wifi_tick() {
     Serial.flush();
   }
 
-  int packetSize = udp.parsePacket();
-  if (packetSize > 0) {
+  while (udp.parsePacket()) {
     totalPacketsReceived++;
     movieNoPacketTime = millis();
     uint8_t header[8];
-    int headerLen = min(packetSize, 8);
+    int headerLen = min(udp.available(), 8);
     udp.read(header, headerLen);
 
     uint32_t frameId;
@@ -1230,10 +1228,9 @@ void movie_wifi_tick() {
     memcpy(&totalChunks, header + 6, 2);
 
     if (movieFrameIdx == 0 && currentFrameId == 0) {
-      Serial.printf("[MOVIE] First packet! frameId=%lu chunk=%d/%d size=%d\n", frameId, chunkIdx, totalChunks, packetSize);
+      Serial.printf("[MOVIE] First packet! frameId=%lu chunk=%d/%d size=%d\n", frameId, chunkIdx, totalChunks, udp.available() + headerLen);
     }
 
-    // New frame arrived — freeze previous frame if 90%+ complete
     if (frameId != currentFrameId) {
       int receivedCount = 0;
       for (int i = 0; i < TOTAL_CHUNKS; i++) {
@@ -1241,7 +1238,6 @@ void movie_wifi_tick() {
       }
 
       if (receivedCount >= TOTAL_CHUNKS * 90 / 100) {
-        // Fill the few missing chunks from last frame
         for (int i = 0; i < TOTAL_CHUNKS; i++) {
           if (!chunkReceived[i]) {
             int off = i * UDP_CHUNK_SIZE;
@@ -1249,7 +1245,9 @@ void movie_wifi_tick() {
             memcpy(((uint8_t *)frameBuf) + off, ((uint8_t *)frameBuf2) + off, len);
           }
         }
-        memcpy(frameBuf2, frameBuf, FRAME_SIZE);
+        uint16_t *tmp = frameBuf;
+        frameBuf = frameBuf2;
+        frameBuf2 = tmp;
         movieNewFrameReady = true;
         movieFrameIdx++;
         movieFpsCount++;
@@ -1259,17 +1257,19 @@ void movie_wifi_tick() {
       memset(chunkReceived, 0, TOTAL_CHUNKS);
     }
 
-    if (packetSize > 8) {
+    int dataLen = udp.available();
+    if (dataLen > 0) {
       int dataOffset = chunkIdx * UDP_CHUNK_SIZE;
-      int dataLen = packetSize - 8;
       if (dataOffset + dataLen <= FRAME_SIZE && chunkIdx < TOTAL_CHUNKS) {
         udp.read(((uint8_t *)frameBuf) + dataOffset, dataLen);
         chunkReceived[chunkIdx] = true;
+      } else {
+        uint8_t discard[1024];
+        while (udp.available()) udp.read(discard, min((int)sizeof(discard), udp.available()));
       }
     }
   }
 
-  // Draw only when a new frame is ready
   if (movieNewFrameReady) {
     movieNewFrameReady = false;
     gfx->draw16bitRGBBitmap(0, 0, frameBuf2, MOVIE_W, MOVIE_H);
@@ -1284,14 +1284,14 @@ void movie_wifi_tick() {
   }
 }
 
-void movie_sd_preload(uint32_t idx, uint16_t *buf) {
+bool movie_sd_open_frame(uint32_t idx, uint16_t *buf) {
   char path[32];
   snprintf(path, sizeof(path), "/MOVIE/frames/%06d.rgb", idx);
-  File f = SD.open(path, FILE_READ);
-  if (f) {
-    f.read((uint8_t *)buf, SD_W * SD_H * 2);
-    f.close();
-  }
+  sdMovieFile = SD.open(path, FILE_READ);
+  if (!sdMovieFile) return false;
+  sdMovieFile.read((uint8_t *)buf, SD_W * SD_H * 2);
+  sdMovieFile.close();
+  return true;
 }
 
 void movie_sd_tick() {
@@ -1303,8 +1303,10 @@ void movie_sd_tick() {
 
   uint16_t *drawBuf = sdUseA ? sdBufA : sdBufB;
 
-  if (!sdPreloaded) {
-    movie_sd_preload(movieFrameIdx, drawBuf);
+  if (sdPreloaded) {
+    sdPreloaded = false;
+  } else {
+    movie_sd_open_frame(movieFrameIdx, drawBuf);
   }
 
   gfx->draw16bitRGBBitmap(0, 0, drawBuf, SD_W, SD_H);
@@ -1313,9 +1315,10 @@ void movie_sd_tick() {
   movieFpsCount++;
 
   uint16_t *nextBuf = sdUseA ? sdBufB : sdBufA;
-  movie_sd_preload(movieFrameIdx, nextBuf);
-  sdUseA = !sdUseA;
-  sdPreloaded = false;
+  if (movie_sd_open_frame(movieFrameIdx, nextBuf)) {
+    sdUseA = !sdUseA;
+    sdPreloaded = true;
+  }
 
   if (now - movieFpsLastTime >= 1000) {
     movieFpsDisplay = movieFpsCount * 1000.0 / (now - movieFpsLastTime);
@@ -1531,6 +1534,15 @@ void setup() {
           movieDisplayActive = true;
           gfx->setRotation(1);
           gfx->fillScreen(0x0000);
+          if (movie_sd_open_frame(0, sdBufA)) {
+            gfx->draw16bitRGBBitmap(0, 0, sdBufA, SD_W, SD_H);
+            sdUseA = true;
+            if (movie_sd_open_frame(1, sdBufB)) {
+              sdUseA = false;
+              sdPreloaded = true;
+              movieFrameIdx = 1;
+            }
+          }
           Serial.printf("[BOOT] SD movie: %d frames @ %.1f fps\n", totalFrames, fps);
           rgb_green();
           return;

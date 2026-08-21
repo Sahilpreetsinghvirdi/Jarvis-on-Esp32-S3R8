@@ -1143,24 +1143,26 @@ void ui_create_brightness() {
   lv_obj_set_style_border_width(line, 0, 0);
   lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
-  int barW = SCR_W - 80;
+  int barW = SCR_W - 60;
   lv_obj_t *barBg = lv_obj_create(scr_brightness);
-  lv_obj_set_size(barBg, barW, 12);
-  lv_obj_align(barBg, LV_ALIGN_TOP_MID, 0, 70);
+  lv_obj_set_size(barBg, barW, 14);
+  lv_obj_align(barBg, LV_ALIGN_TOP_MID, 0, 68);
   lv_obj_set_style_bg_color(barBg, lv_color_hex(0x1e3a5f), 0);
   lv_obj_set_style_bg_opa(barBg, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(barBg, 6, 0);
+  lv_obj_set_style_radius(barBg, 7, 0);
   lv_obj_set_style_border_width(barBg, 0, 0);
+  lv_obj_set_style_pad_all(barBg, 0, 0);
   lv_obj_clear_flag(barBg, LV_OBJ_FLAG_SCROLLABLE);
 
   brite_fill = lv_obj_create(barBg);
   int fillW = map(currentBrightness, 0, 255, 0, barW);
-  lv_obj_set_size(brite_fill, fillW > 1 ? fillW : 1, 12);
+  lv_obj_set_size(brite_fill, fillW > 1 ? fillW : 1, 14);
   lv_obj_align(brite_fill, LV_ALIGN_LEFT_MID, 0, 0);
   lv_obj_set_style_bg_color(brite_fill, lv_color_hex(0x22c55e), 0);
   lv_obj_set_style_bg_opa(brite_fill, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(brite_fill, 6, 0);
+  lv_obj_set_style_radius(brite_fill, 0, 0);
   lv_obj_set_style_border_width(brite_fill, 0, 0);
+  lv_obj_set_style_pad_all(brite_fill, 0, 0);
   lv_obj_clear_flag(brite_fill, LV_OBJ_FLAG_SCROLLABLE);
 
   brite_label = lv_label_create(scr_brightness);
@@ -1218,7 +1220,7 @@ void switchToScreen(ScreenID id) {
       scanWiFiAndPopulate();
       break;
     case SCR_BRIGHTNESS: {
-      int w = map(currentBrightness, 0, 255, 0, SCR_W - 80);
+      int w = map(currentBrightness, 0, 255, 0, SCR_W - 60);
       lv_obj_set_width(brite_fill, w > 1 ? w : 1);
       lv_label_set_text_fmt(brite_label, "%d%%", map(currentBrightness, 0, 255, 0, 100));
       lv_scr_load(scr_brightness);
@@ -2032,7 +2034,7 @@ static void doScrollDown() {
   } else if (currentScreen == SCR_BRIGHTNESS) {
     currentBrightness = min(255, currentBrightness + 17);
     ledcWrite(TFT_BL, currentBrightness);
-    int w = map(currentBrightness, 0, 255, 0, SCR_W - 80);
+    int w = map(currentBrightness, 0, 255, 0, SCR_W - 60);
     lv_obj_set_width(brite_fill, w > 1 ? w : 1);
     lv_label_set_text_fmt(brite_label, "%d%%", map(currentBrightness, 0, 255, 0, 100));
   } else if (currentScreen == SCR_WIFI_SELECT) {
@@ -2058,7 +2060,7 @@ static void doScrollUp() {
   } else if (currentScreen == SCR_BRIGHTNESS) {
     currentBrightness = max(0, currentBrightness - 17);
     ledcWrite(TFT_BL, currentBrightness);
-    int w = map(currentBrightness, 0, 255, 0, SCR_W - 80);
+    int w = map(currentBrightness, 0, 255, 0, SCR_W - 60);
     lv_obj_set_width(brite_fill, w > 1 ? w : 1);
     lv_label_set_text_fmt(brite_label, "%d%%", map(currentBrightness, 0, 255, 0, 100));
   } else if (currentScreen == SCR_WIFI_SELECT) {

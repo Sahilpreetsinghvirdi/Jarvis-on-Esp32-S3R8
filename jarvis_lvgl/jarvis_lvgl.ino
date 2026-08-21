@@ -118,6 +118,7 @@ static int photoIdx = 0;
 // ===== PHOTO VIEWER STATE =====
 static bool photoViewActive = false;
 static int currentPhotoIdx = 0;
+static bool photoZoomed = false;
 
 // ===== STYLES =====
 static lv_style_t style_user;
@@ -1902,7 +1903,24 @@ void photo_view_start(int idx) {
     f.read((uint8_t *)photoBuf, w * h * 2);
     f.close();
     gfx->fillScreen(0x0000);
-    gfx->draw16bitRGBBitmap(0, 0, photoBuf, w, h);
+
+    if (photoZoomed) {
+      int srcX = w / 4;
+      int srcY = h / 4;
+      int srcW = w / 2;
+      int srcH = h / 2;
+      uint16_t rowBuf[320];
+      for (int y = 0; y < h; y++) {
+        int sy = srcY + ((long)y * srcH / h);
+        for (int x = 0; x < w; x++) {
+          int sx = srcX + ((long)x * srcW / w);
+          rowBuf[x] = photoBuf[sy * w + sx];
+        }
+        gfx->draw16bitRGBBitmap(0, y, rowBuf, 1, w);
+      }
+    } else {
+      gfx->draw16bitRGBBitmap(0, 0, photoBuf, w, h);
+    }
 
     gfx->setTextColor(0xFFFF, 0x0000);
     gfx->setTextSize(1);
@@ -1925,11 +1943,17 @@ void photo_view_start(int idx) {
 
 void photo_view_stop() {
   photoViewActive = false;
+  photoZoomed = false;
   gfx->setRotation(1);
   movieDisplayActive = false;
   autoRotateEnabled = true;
   lv_refr_now(NULL);
   switchToScreen(SCR_PHOTO_LIST);
+}
+
+void photo_view_toggle_zoom() {
+  photoZoomed = !photoZoomed;
+  photo_view_start(currentPhotoIdx);
 }
 
 void photo_view_next() {
@@ -2104,6 +2128,8 @@ void handleButton() {
         btnFSM = BTN_PRESSED;
       } else if (now - btnReleaseTime >= TAP_WINDOW_MS) {
         if (tapCount == 1) doSelect();
+        else if (tapCount == 2) doBack();
+        else if (tapCount >= 3 && photoViewActive) photo_view_toggle_zoom();
         else doBack();
         btnFSM = BTN_IDLE;
       }

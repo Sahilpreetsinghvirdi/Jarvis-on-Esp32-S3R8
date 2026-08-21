@@ -803,6 +803,7 @@ void updateVideoListSelection() {
       lv_obj_set_style_text_color(video_items[i], lv_color_hex(0x9ca3af), 0);
     }
   }
+  if (video_items[videoIdx]) lv_obj_scroll_to_view(video_items[videoIdx], LV_ANIM_ON);
 }
 
 // ===== PHOTO LIST SCREEN =====
@@ -911,6 +912,7 @@ void updatePhotoListSelection() {
       lv_obj_set_style_text_color(photo_items[i], lv_color_hex(0x9ca3af), 0);
     }
   }
+  if (photo_items[photoIdx]) lv_obj_scroll_to_view(photo_items[photoIdx], LV_ANIM_ON);
 }
 
 void scanWiFiAndPopulate() {

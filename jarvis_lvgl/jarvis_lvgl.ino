@@ -1,10 +1,19 @@
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Arduino_GFX_Library.h>
 #include <lvgl.h>
 #include <Wire.h>
+#include <WiFiClient.h>
+#include <WiFiServer.h>
+#include <WiFiUdp.h>
+#include <SD.h>
+#include <SPI.h>
 #include "fonts.h"
+
+// SD card uses separate SPI bus (SPI3/HSPI) to avoid conflict with LCD on SPI2/FSPI
+SPIClass sdSPI(HSPI);
 
 // ===== CONFIG =====
 #define WIFI_SSID    "Net+"
@@ -16,14 +25,19 @@
 #define TFT_BL    46
 #define BTN_PIN    0
 #define RGB_LED_PIN 38
+// SD SPI via built-in TF card slot
+#define SD_CS   21
+#define SD_MOSI 15
+#define SD_MISO 16
+#define SD_SCLK 14
 
 // ===== DISPLAY (Arduino_GFX) =====
 #define SCR_W 320
 #define SCR_H 172
 
-Arduino_DataBus *bus = new Arduino_ESP32SPI(41, 42, 40, 45);
+Arduino_DataBus *bus = new Arduino_ESP32SPIDMA(41, 42, 40, 45);
 Arduino_GFX *gfx = new Arduino_ST7789(
-  bus, 39, 0, false,
+  bus, 39, 0, true,
   172, 320,
   34, 0, 34, 0);
 
@@ -76,12 +90,12 @@ static lv_style_t style_settings_selected;
 static lv_style_t style_title;
 
 // ===== CHAT =====
-#define MAX_LINES 100
+#define MAX_LINES 20
 String chatLines[MAX_LINES];
 int chatCount = 0;
 
 // ===== CONVERSATION HISTORY =====
-#define MAX_HISTORY 10
+#define MAX_HISTORY 5
 String histRole[MAX_HISTORY];
 String histContent[MAX_HISTORY];
 int histCount = 0;
@@ -102,6 +116,96 @@ void histAdd(const char *role, const char *content) {
 // ===== STREAMING =====
 bool isStreaming = false;
 String streamBuffer = "";
+#define MAX_RESPONSE_LEN 800
+
+// ===== STREAMING HELPERS =====
+static WiFiClientSecure *streamClient = NULL;
+static HTTPClient streamHttp;
+static StaticJsonDocument<384> streamRespDoc;
+static char streamLineBuf[512];
+static int streamLineLen = 0;
+
+// ===== MOVIE PLAYBACK =====
+enum MovieMode { MOVIE_OFF, MOVIE_WIFI, MOVIE_SD };
+static MovieMode movieMode = MOVIE_OFF;
+static bool moviePaused = false;
+static uint32_t movieFrameIdx = 0;
+static uint32_t movieTotalFrames = 0;
+static unsigned long movieFrameMs = 33;
+static unsigned long movieLastFrameTime = 0;
+static unsigned long movieFpsCount = 0;
+static unsigned long movieFpsLastTime = 0;
+static float movieFpsDisplay = 0;
+static unsigned long movieNoPacketTime = 0;
+static bool movieNewFrameReady = false;
+
+#define MOVIE_W 160
+#define MOVIE_H 86
+#define SD_W 320
+#define SD_H 172
+#define FRAME_SIZE (MOVIE_W * MOVIE_H * 2)
+#define UDP_PORT 9999
+#define UDP_CHUNK_SIZE 1400
+#define TOTAL_CHUNKS ((FRAME_SIZE + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE)
+
+static uint16_t *frameBuf = NULL;
+static uint16_t *frameBuf2 = NULL;
+static uint16_t *scaledBuf = NULL;
+static uint16_t *sdBufA = NULL;
+static uint16_t *sdBufB = NULL;
+static bool sdPreloaded = false;
+static bool sdUseA = true;
+static WiFiUDP udp;
+static bool *chunkReceived = NULL;
+static uint32_t currentFrameId = 0;
+static bool movieBuffersOk = false;
+
+static lv_obj_t *scr_movie = NULL;
+static lv_obj_t *movie_lbl_status = NULL;
+static lv_obj_t *movie_lbl_fps = NULL;
+
+// ===== WIFI TELNET SERVER =====
+#define TELNET_PORT 23
+WiFiServer telnetServer(TELNET_PORT);
+WiFiClient telnetClient;
+bool telnetConnected = false;
+
+void telnet_init() {
+  telnetServer.begin();
+  telnetServer.setNoDelay(true);
+  Serial.println("[TELNET] Server started on port 23");
+}
+
+void telnet_send(const String &msg) {
+  if (telnetConnected && telnetClient.connected()) {
+    telnetClient.println(msg);
+  }
+}
+
+void processInput(const String &input, bool fromBT);
+
+void telnet_handle() {
+  if (!telnetClient || !telnetClient.connected()) {
+    if (telnetConnected) {
+      telnetConnected = false;
+      Serial.println("[TELNET] Client disconnected");
+    }
+    telnetClient = telnetServer.available();
+    if (telnetClient) {
+      telnetConnected = true;
+      Serial.println("[TELNET] Client connected from " + telnetClient.remoteIP().toString());
+      telnetClient.println("\n=== JARVIS ESP32-S3 Terminal ===");
+      telnetClient.println("Type your message or !help for commands\n");
+    }
+  }
+  if (telnetConnected && telnetClient.available()) {
+    String input = telnetClient.readStringUntil('\n');
+    input.trim();
+    if (input.length() > 0) {
+      processInput(input, true);
+    }
+  }
+}
 
 // ===== BRIGHTNESS =====
 int currentBrightness = 255;
@@ -146,6 +250,7 @@ void rgb_rainbow_cycle(int cycles) {
 #define IMU_SCL 47
 
 bool imuOK = false;
+bool autoRotateEnabled = true;
 uint8_t currentRotation = 1;
 uint8_t pendingRotation = 1;
 int rotStableCount = 0;
@@ -220,7 +325,7 @@ uint8_t calc_rotation(float ax, float ay, float az) {
 }
 
 void check_auto_rotation() {
-  if (!imuOK) return;
+  if (!imuOK || !autoRotateEnabled) return;
   unsigned long now = millis();
   if (now - lastRotCheck < ROT_CHECK_MS) return;
   lastRotCheck = now;
@@ -228,12 +333,6 @@ void check_auto_rotation() {
   float ax, ay, az;
   qmi_read_accel(ax, ay, az);
   uint8_t rot = calc_rotation(ax, ay, az);
-
-  static int lastLog = 0;
-  if (millis() - lastLog > 2000) {
-    lastLog = millis();
-    Serial.printf("[IMU] rot=%d\n", currentRotation);
-  }
 
   if (rot == pendingRotation) {
     rotStableCount++;
@@ -253,7 +352,14 @@ void check_auto_rotation() {
 }
 
 // ===== LVGL FLUSH =====
+static bool movieDisplayActive = false;
+static unsigned long totalPacketsReceived = 0;
+
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+  if (movieDisplayActive) {
+    lv_disp_flush_ready(disp);
+    return;
+  }
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
   gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)color_p, w, h);
@@ -677,12 +783,13 @@ void sendToGroq(String query) {
     return;
   }
 
-  HTTPClient http;
-  http.begin("https://api.groq.com/openai/v1/chat/completions");
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", "Bearer " + String(GROQ_API_KEY));
+  streamClient = new WiFiClientSecure;
+  streamClient->setInsecure();
+  streamHttp.begin(*streamClient, "https://api.groq.com/openai/v1/chat/completions");
+  streamHttp.addHeader("Content-Type", "application/json");
+  streamHttp.addHeader("Authorization", "Bearer " + String(GROQ_API_KEY));
 
-  StaticJsonDocument<4096> doc;
+  StaticJsonDocument<2048> doc;
   doc["model"] = GROQ_MODEL;
   doc["stream"] = true;
   JsonArray messages = doc.createNestedArray("messages");
@@ -701,15 +808,18 @@ void sendToGroq(String query) {
   String payload;
   serializeJson(doc, payload);
 
-  int code = http.POST(payload);
+  int code = streamHttp.POST(payload);
   if (code != 200) {
-    add_sys_msg(("HTTP " + String(code) + ": " + http.getString()).c_str());
-    http.end();
+    add_sys_msg(("HTTP " + String(code) + ": " + streamHttp.getString()).c_str());
+    streamHttp.end();
+    delete streamClient;
+    streamClient = NULL;
     return;
   }
 
   isStreaming = true;
   streamBuffer = "";
+  streamLineLen = 0;
   rgb_blue();
 
   histAdd("user", query.c_str());
@@ -729,7 +839,7 @@ void sendToGroq(String query) {
   lv_obj_set_style_text_color(pfx, lv_color_hex(0x60a5fa), 0);
 
   lv_obj_t *lbl = lv_label_create(container);
-  lv_label_set_text(lbl, "...");
+  lv_label_set_text(lbl, "");
   lv_obj_set_style_text_color(lbl, lv_color_hex(0xff8888), 0);
   lv_obj_set_style_text_font(lbl, &font_msg_14, 0);
   lv_obj_set_width(lbl, SCR_W - 20);
@@ -737,55 +847,76 @@ void sendToGroq(String query) {
 
   lv_obj_scroll_to_y(msg_list, LV_COORD_MAX, LV_ANIM_ON);
 
-  WiFiClient *s = http.getStreamPtr();
-  StaticJsonDocument<384> resp;
-  String buf = "";
+  WiFiClient *s = streamHttp.getStreamPtr();
+  unsigned long lastLvgl = 0;
+  int lastLen = 0;
 
-  while (http.connected() || s->available()) {
+  while (streamHttp.connected() || s->available()) {
     if (s->available()) {
       char c = s->read();
-      buf += c;
       if (c == '\n') {
-        buf.trim();
-        if (buf.startsWith("data: ")) {
-          String json = buf.substring(6);
-          if (json == "[DONE]") break;
+        streamLineBuf[streamLineLen] = '\0';
+        if (strncmp(streamLineBuf, "data: ", 6) == 0) {
+          const char *json = streamLineBuf + 6;
+          if (strcmp(json, "[DONE]") == 0) break;
+          DeserializationError err = deserializeJson(streamRespDoc, json);
+          if (!err && streamRespDoc["choices"][0]["delta"].containsKey("content")) {
+            const char *token = streamRespDoc["choices"][0]["delta"]["content"];
+            int tokLen = strlen(token);
+            if ((int)streamBuffer.length() + tokLen < MAX_RESPONSE_LEN) {
+              streamBuffer += token;
+    }
+  } else {
+    if (millis() - movieNoPacketTime > 3000 && movieFrameIdx == 0) {
+      static unsigned long lastWarn = 0;
+      if (millis() - lastWarn > 5000) {
+        lastWarn = millis();
+        Serial.printf("[MOVIE] No packets received for 3s! Check: laptop & ESP32 on same WiFi? Send to %s:%d\n",
+                      WiFi.localIP().toString().c_str(), UDP_PORT);
+      }
+    }
+  }
+}
+        streamLineLen = 0;
+      } else if (streamLineLen < 511) {
+        streamLineBuf[streamLineLen++] = c;
+      }
+    }
 
-          DeserializationError err = deserializeJson(resp, json);
-          if (!err && resp["choices"][0]["delta"].containsKey("content")) {
-            String token = resp["choices"][0]["delta"]["content"].as<String>();
-            streamBuffer += token;
-
-            lv_label_set_text(lbl, streamBuffer.c_str());
-            lv_obj_scroll_to_y(msg_list, LV_COORD_MAX, LV_ANIM_ON);
-            lv_refr_now(NULL);
-
-            if (ledEnabled) {
-              static uint8_t pulse = 0;
-              pulse = (pulse + 15) % 256;
-              uint8_t bri = 40 + (pulse > 128 ? 255 - pulse : pulse);
-              neopixelWrite(RGB_LED_PIN, 0, 0, bri);
-            }
-          }
-        }
-        buf = "";
+    unsigned long now = millis();
+    if ((int)streamBuffer.length() != lastLen && now - lastLvgl > 30) {
+      lv_label_set_text(lbl, streamBuffer.c_str());
+      lv_obj_scroll_to_y(msg_list, LV_COORD_MAX, LV_ANIM_ON);
+      lastLvgl = now;
+      lastLen = streamBuffer.length();
+      if (ledEnabled) {
+        static uint8_t pulse = 0;
+        pulse = (pulse + 15) % 256;
+        uint8_t bri = 40 + (pulse > 128 ? 255 - pulse : pulse);
+        neopixelWrite(RGB_LED_PIN, 0, 0, bri);
       }
     }
     lv_timer_handler();
     yield();
   }
 
-  http.end();
+  lv_label_set_text(lbl, streamBuffer.c_str());
+  lv_obj_scroll_to_y(msg_list, LV_COORD_MAX, LV_ANIM_ON);
+
+  streamHttp.end();
+  delete streamClient;
+  streamClient = NULL;
   isStreaming = false;
   rgb_off();
 
   histAdd("assistant", streamBuffer.c_str());
-
   if (chatCount < MAX_LINES) {
     chatLines[chatCount++] = streamBuffer;
   }
 
   Serial.println("\n[JARVIS] " + streamBuffer);
+  telnet_send("\n[JARVIS] " + streamBuffer);
+  streamBuffer = "";
 }
 
 // ===== BUTTON HANDLER =====
@@ -814,8 +945,17 @@ void handleButton() {
         if (currentScreen == SCR_MAIN) lv_obj_scroll_by(msg_list, 0, -40, LV_ANIM_ON);
         else if (currentScreen == SCR_WIFI_SELECT) { wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection(); }
         else if (currentScreen == SCR_SETTINGS) { settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay(); }
+      } else if (holdTime < 300 && pressCount == 1) {
+        if (movieMode != MOVIE_OFF) {
+          movie_toggle_pause();
+          pressCount = 0;
+        }
       } else if (holdTime < 300 && pressCount >= 3) {
-        if (currentScreen == SCR_MAIN) switchToScreen(SCR_SETTINGS);
+        if (movieMode != MOVIE_OFF) {
+          if (movieMode == MOVIE_WIFI) movie_wifi_stop();
+          else movie_sd_stop();
+          pressCount = 0;
+        } else if (currentScreen == SCR_MAIN) switchToScreen(SCR_SETTINGS);
         else if (currentScreen == SCR_SETTINGS) {
           switch (settingsIdx) {
             case 0: switchToScreen(SCR_WIFI_SELECT); break;
@@ -854,91 +994,455 @@ void handleButton() {
   btnState = reading;
 }
 
-// ===== SERIAL INPUT =====
-String serialInput = "";
+// ===== MOVIE FUNCTIONS =====
+bool movie_alloc_buffers() {
+  if (movieBuffersOk) return true;
+  frameBuf = (uint16_t *)ps_malloc(FRAME_SIZE);
+  frameBuf2 = (uint16_t *)ps_malloc(FRAME_SIZE);
+  scaledBuf = (uint16_t *)ps_malloc(SCR_W * SCR_H * 2);
+  chunkReceived = (bool *)ps_malloc(TOTAL_CHUNKS);
+  if (!frameBuf || !frameBuf2 || !scaledBuf || !chunkReceived) {
+    Serial.println("[MOVIE] Failed to allocate frame buffers in PSRAM");
+    free(frameBuf); frameBuf = NULL;
+    free(frameBuf2); frameBuf2 = NULL;
+    free(scaledBuf); scaledBuf = NULL;
+    free(chunkReceived); chunkReceived = NULL;
+    return false;
+  }
+  movieBuffersOk = true;
+  memset(frameBuf, 0, FRAME_SIZE);
+  memset(frameBuf2, 0, FRAME_SIZE);
+  memset(scaledBuf, 0, SCR_W * SCR_H * 2);
+  memset(chunkReceived, 0, TOTAL_CHUNKS);
 
-void handleSerialInput() {
+  int sdFrameBytes = SD_W * SD_H * 2;
+  sdBufA = (uint16_t *)ps_malloc(sdFrameBytes);
+  sdBufB = (uint16_t *)ps_malloc(sdFrameBytes);
+  sdPreloaded = false;
+  sdUseA = true;
+
+  Serial.printf("[MOVIE] Buffers: %dKB x2 + scaled + SD double-buf %dKB x2\n", FRAME_SIZE / 1024, sdFrameBytes / 1024);
+  return true;
+}
+
+void movie_free_buffers() {
+  free(frameBuf); frameBuf = NULL;
+  free(frameBuf2); frameBuf2 = NULL;
+  free(scaledBuf); scaledBuf = NULL;
+  free(sdBufA); sdBufA = NULL;
+  free(sdBufB); sdBufB = NULL;
+  free(chunkReceived); chunkReceived = NULL;
+  movieBuffersOk = false;
+}
+
+void movie_create_ui() {
+  if (scr_movie) return;
+  scr_movie = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_movie, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_opa(scr_movie, LV_OPA_COVER, 0);
+
+  movie_lbl_status = lv_label_create(scr_movie);
+  lv_label_set_text(movie_lbl_status, "MOVIE");
+  lv_obj_set_style_text_font(movie_lbl_status, &font_msg_12, 0);
+  lv_obj_set_style_text_color(movie_lbl_status, lv_color_hex(0x22c55e), 0);
+  lv_obj_align(movie_lbl_status, LV_ALIGN_TOP_LEFT, 4, 2);
+
+  movie_lbl_fps = lv_label_create(scr_movie);
+  lv_label_set_text(movie_lbl_fps, "0 fps");
+  lv_obj_set_style_text_font(movie_lbl_fps, &font_msg_12, 0);
+  lv_obj_set_style_text_color(movie_lbl_fps, lv_color_hex(0xfbbf24), 0);
+  lv_obj_align(movie_lbl_fps, LV_ALIGN_TOP_RIGHT, -4, 2);
+}
+
+void movie_show_ui() {
+  movie_create_ui();
+  lv_scr_load(scr_movie);
+}
+
+void movie_hide_ui() {
+  currentScreen = SCR_MAIN;
+  lv_scr_load(scr_main);
+}
+
+void movie_wifi_start() {
+  if (WiFi.status() != WL_CONNECTED) {
+    add_sys_msg("! WiFi not connected. Connect first.");
+    return;
+  }
+  if (!movie_alloc_buffers()) {
+    add_sys_msg("! Not enough PSRAM for movie buffers");
+    return;
+  }
+  movieMode = MOVIE_WIFI;
+  moviePaused = false;
+  movieFrameIdx = 0;
+  currentFrameId = 0;
+  movieFpsCount = 0;
+  movieFpsLastTime = millis();
+  movieNoPacketTime = millis();
+  memset(chunkReceived, 0, TOTAL_CHUNKS);
+  autoRotateEnabled = false;
+
+  gfx->setRotation(1);
+  gfx->fillScreen(0x0000);
+  gfx->setTextColor(0x07E0, 0x0000);
+  gfx->setTextSize(1);
+  gfx->setCursor(4, 2);
+  gfx->print("UDP STREAMING");
+  gfx->setCursor(MOVIE_W - 60, 2);
+  gfx->print("0 fps");
+
+  movieDisplayActive = true;
+
+  udp.begin(UDP_PORT);
+  String startMsg = "Movie ON. IP=" + WiFi.localIP().toString() + " UDP:" + String(UDP_PORT);
+  add_sys_msg(startMsg.c_str());
+  Serial.printf("[MOVIE] Listening on UDP %s:%d\n", WiFi.localIP().toString().c_str(), UDP_PORT);
+  rgb_cyan();
+}
+
+void movie_wifi_stop() {
+  udp.stop();
+  movieMode = MOVIE_OFF;
+  movieDisplayActive = false;
+  autoRotateEnabled = true;
+  movie_free_buffers();
+  rgb_off();
+  lv_scr_load(scr_main);
+  lv_refr_now(NULL);
+  add_sys_msg("Movie mode OFF.");
+}
+
+void movie_sd_start() {
+  if (!movie_alloc_buffers()) {
+    add_sys_msg("! Not enough PSRAM for movie buffers");
+    return;
+  }
+
+  sdSPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+  if (!SD.begin(SD_CS, sdSPI, 40000000)) {
+    add_sys_msg("! SD card not found.");
+    Serial.println("[MOVIE] SD init failed");
+    movie_free_buffers();
+    return;
+  }
+
+  File meta = SD.open("/MOVIE/meta.txt", FILE_READ);
+  if (!meta) {
+    add_sys_msg("! No /MOVIE/meta.txt on SD. Run Python preprocessor first.");
+    Serial.println("[MOVIE] meta.txt not found");
+    SD.end();
+    movie_free_buffers();
+    return;
+  }
+
+  String metaStr = meta.readString();
+  meta.close();
+
+  int w, h, totalFrames;
+  float fps;
+  if (sscanf(metaStr.c_str(), "%d %d %d %f", &w, &h, &totalFrames, &fps) != 4) {
+    add_sys_msg("! Invalid meta.txt format");
+    SD.end();
+    movie_free_buffers();
+    return;
+  }
+
+  movieTotalFrames = totalFrames;
+  movieFrameMs = (unsigned long)(1000.0 / fps);
+  movieFrameIdx = 0;
+  movieFpsCount = 0;
+  movieFpsLastTime = millis();
+  movieMode = MOVIE_SD;
+  moviePaused = false;
+  autoRotateEnabled = false;
+
+  gfx->setRotation(1);
+  gfx->fillScreen(0x0000);
+  gfx->setTextColor(0x07E0, 0x0000);
+  gfx->setTextSize(1);
+  gfx->setCursor(4, 2);
+  gfx->print("SD PLAYBACK");
+  gfx->setCursor(MOVIE_W - 60, 2);
+  gfx->print("0 fps");
+
+  movieDisplayActive = true;
+  add_sys_msg(("SD movie: " + String(totalFrames) + " frames @ " + String(fps, 1) + "fps").c_str());
+  Serial.printf("[MOVIE] SD movie: %d frames, %dfps, %dms/frame\n", totalFrames, (int)fps, movieFrameMs);
+  rgb_green();
+}
+
+void movie_sd_stop() {
+  SD.end();
+  movieMode = MOVIE_OFF;
+  movieDisplayActive = false;
+  autoRotateEnabled = true;
+  movie_free_buffers();
+  rgb_off();
+  lv_scr_load(scr_main);
+  lv_refr_now(NULL);
+  add_sys_msg("Movie mode OFF.");
+}
+
+void movie_toggle_pause() {
+  if (movieMode == MOVIE_OFF) return;
+  moviePaused = !moviePaused;
+  lv_label_set_text(movie_lbl_status, moviePaused ? "PAUSED" : (movieMode == MOVIE_WIFI ? "UDP STREAMING" : "SD PLAYBACK"));
+  Serial.printf("[MOVIE] %s\n", moviePaused ? "Paused" : "Resumed");
+}
+
+void movieDrawScaled(uint16_t *src, int sw, int sh) {
+  for (int y = 0; y < sh; y++) {
+    uint16_t *sp = src + y * sw;
+    uint16_t *dp = scaledBuf + y * 2 * SCR_W;
+    uint16_t *dp2 = dp + SCR_W;
+    for (int x = 0; x < sw; x++) {
+      dp[x * 2]     = sp[x];
+      dp[x * 2 + 1] = sp[x];
+    }
+    memcpy(dp2, dp, SCR_W * 2);
+  }
+  gfx->draw16bitRGBBitmap(0, 0, scaledBuf, SCR_W, SCR_H);
+}
+
+void movie_wifi_tick() {
+  if (movieMode != MOVIE_WIFI || moviePaused) return;
+
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat > 2000) {
+    lastHeartbeat = millis();
+    Serial.printf("[MOVIE] tick: mode=%d WiFi=%d packets=%lu\n", (int)movieMode, WiFi.status(), totalPacketsReceived);
+    Serial.flush();
+  }
+
+  int packetSize = udp.parsePacket();
+  if (packetSize > 0) {
+    totalPacketsReceived++;
+    movieNoPacketTime = millis();
+    uint8_t header[8];
+    int headerLen = min(packetSize, 8);
+    udp.read(header, headerLen);
+
+    uint32_t frameId;
+    uint16_t chunkIdx, totalChunks;
+    memcpy(&frameId, header, 4);
+    memcpy(&chunkIdx, header + 4, 2);
+    memcpy(&totalChunks, header + 6, 2);
+
+    if (movieFrameIdx == 0 && currentFrameId == 0) {
+      Serial.printf("[MOVIE] First packet! frameId=%lu chunk=%d/%d size=%d\n", frameId, chunkIdx, totalChunks, packetSize);
+    }
+
+    // New frame arrived — freeze previous frame if 90%+ complete
+    if (frameId != currentFrameId) {
+      int receivedCount = 0;
+      for (int i = 0; i < TOTAL_CHUNKS; i++) {
+        if (chunkReceived[i]) receivedCount++;
+      }
+
+      if (receivedCount >= TOTAL_CHUNKS * 90 / 100) {
+        // Fill the few missing chunks from last frame
+        for (int i = 0; i < TOTAL_CHUNKS; i++) {
+          if (!chunkReceived[i]) {
+            int off = i * UDP_CHUNK_SIZE;
+            int len = min(UDP_CHUNK_SIZE, FRAME_SIZE - off);
+            memcpy(((uint8_t *)frameBuf) + off, ((uint8_t *)frameBuf2) + off, len);
+          }
+        }
+        memcpy(frameBuf2, frameBuf, FRAME_SIZE);
+        movieNewFrameReady = true;
+        movieFrameIdx++;
+        movieFpsCount++;
+      }
+
+      currentFrameId = frameId;
+      memset(chunkReceived, 0, TOTAL_CHUNKS);
+    }
+
+    if (packetSize > 8) {
+      int dataOffset = chunkIdx * UDP_CHUNK_SIZE;
+      int dataLen = packetSize - 8;
+      if (dataOffset + dataLen <= FRAME_SIZE && chunkIdx < TOTAL_CHUNKS) {
+        udp.read(((uint8_t *)frameBuf) + dataOffset, dataLen);
+        chunkReceived[chunkIdx] = true;
+      }
+    }
+  }
+
+  // Draw only when a new frame is ready
+  if (movieNewFrameReady) {
+    movieNewFrameReady = false;
+    gfx->draw16bitRGBBitmap(0, 0, frameBuf2, MOVIE_W, MOVIE_H);
+
+    unsigned long now = millis();
+    if (now - movieFpsLastTime >= 1000) {
+      movieFpsDisplay = movieFpsCount * 1000.0 / (now - movieFpsLastTime);
+      movieFpsCount = 0;
+      movieFpsLastTime = now;
+      Serial.printf("[MOVIE] %d frames, %.0f fps, %lu pkts\n", movieFrameIdx, movieFpsDisplay, totalPacketsReceived);
+    }
+  }
+}
+
+void movie_sd_preload(uint32_t idx, uint16_t *buf) {
+  char path[32];
+  snprintf(path, sizeof(path), "/MOVIE/frames/%06d.rgb", idx);
+  File f = SD.open(path, FILE_READ);
+  if (f) {
+    f.read((uint8_t *)buf, SD_W * SD_H * 2);
+    f.close();
+  }
+}
+
+void movie_sd_tick() {
+  if (movieMode != MOVIE_SD || moviePaused) return;
+
+  unsigned long now = millis();
+  if (now - movieLastFrameTime < movieFrameMs) return;
+  movieLastFrameTime = now;
+
+  uint16_t *drawBuf = sdUseA ? sdBufA : sdBufB;
+
+  if (!sdPreloaded) {
+    movie_sd_preload(movieFrameIdx, drawBuf);
+  }
+
+  gfx->draw16bitRGBBitmap(0, 0, drawBuf, SD_W, SD_H);
+  movieFrameIdx++;
+  if (movieFrameIdx >= movieTotalFrames) movieFrameIdx = 0;
+  movieFpsCount++;
+
+  uint16_t *nextBuf = sdUseA ? sdBufB : sdBufA;
+  movie_sd_preload(movieFrameIdx, nextBuf);
+  sdUseA = !sdUseA;
+  sdPreloaded = false;
+
+  if (now - movieFpsLastTime >= 1000) {
+    movieFpsDisplay = movieFpsCount * 1000.0 / (now - movieFpsLastTime);
+    movieFpsCount = 0;
+    movieFpsLastTime = now;
+    Serial.printf("[MOVIE] SD %d/%d, %.0f fps\n", movieFrameIdx, movieTotalFrames, movieFpsDisplay);
+  }
+}
+
+void movie_tick() {
+  if (movieMode == MOVIE_WIFI) movie_wifi_tick();
+  else if (movieMode == MOVIE_SD) movie_sd_tick();
+}
+
+// ===== INPUT =====
+String serialInput = "";
+bool lastInputWasBT = false;
+
+void processInput(const String &input, bool fromBT) {
+  lastInputWasBT = fromBT;
+  if (input.length() == 0) return;
+  String cmd = input;
+  cmd.trim();
+
+  auto reply = [&](const String &msg) {
+    if (fromBT) telnet_send(msg); else Serial.println(msg);
+  };
+
+  if (cmd == "!clear") {
+    lv_obj_clean(msg_list);
+    chatCount = 0;
+    histCount = 0;
+    add_sys_msg("Chat cleared.");
+  } else if (cmd == "!imu") {
+    if (imuOK) {
+      float ax, ay, az;
+      qmi_read_accel(ax, ay, az);
+      float angle = atan2(ay, az) * 180.0 / PI;
+      String msg = "IMU: ax=" + String(ax,2) + " ay=" + String(ay,2) + " az=" + String(az,2) + " angle=" + String(angle,1) + " rot=" + String(currentRotation);
+      add_sys_msg(msg.c_str());
+      reply("[IMU] " + msg);
+    } else {
+      add_sys_msg("IMU not detected");
+    }
+  } else if (cmd == "!rotate") {
+    autoRotateEnabled = !autoRotateEnabled;
+    String msg = "Auto-rotate: " + String(autoRotateEnabled ? "ON" : "OFF");
+    add_sys_msg(msg.c_str());
+    reply("[JARVIS] " + msg);
+  } else if (cmd == "!wifi") {
+    switchToScreen(SCR_WIFI_SELECT);
+  } else if (cmd == "!settings") {
+    switchToScreen(SCR_SETTINGS);
+  } else if (cmd == "!net") {
+    String msg = "Telnet: " + WiFi.localIP().toString() + ":23 | Client: " + String(telnetConnected ? "Yes" : "No");
+    add_sys_msg(msg.c_str());
+    reply("[NET] " + msg);
+  } else if (cmd == "!movie wifi") {
+    if (movieMode != MOVIE_OFF) movie_wifi_stop();
+    movie_wifi_start();
+    reply("[MOVIE] WiFi streaming started. IP=" + WiFi.localIP().toString() + " UDP:" + String(UDP_PORT));
+  } else if (cmd == "!movie sd") {
+    if (movieMode != MOVIE_OFF) movie_sd_stop();
+    movie_sd_start();
+  } else if (cmd == "!movie stop") {
+    if (movieMode == MOVIE_WIFI) movie_wifi_stop();
+    else if (movieMode == MOVIE_SD) movie_sd_stop();
+    reply("[MOVIE] Stopped");
+  } else if (cmd == "!movie pause") {
+    movie_toggle_pause();
+  } else if (cmd == "!help") {
+    String msg = "Commands: !clear !wifi !settings !bright <0-100> !net !rotate !imu\nMovie: !movie wifi|sd|stop|pause";
+    add_sys_msg(msg.c_str());
+    reply("[JARVIS] " + msg);
+  } else if (cmd.startsWith("!bright ")) {
+    int val = cmd.substring(8).toInt();
+    if (val >= 0 && val <= 100) {
+      currentBrightness = map(val, 0, 100, 0, 255);
+      add_sys_msg(("Brightness: " + String(val) + "%").c_str());
+    }
+  } else {
+    if (currentScreen != SCR_MAIN) switchToScreen(SCR_MAIN);
+    add_user_msg(cmd.c_str());
+    lv_label_set_text(input_label, ("> " + cmd).c_str());
+    sendToGroq(cmd);
+    lv_label_set_text(input_label, fromBT ? "Type on BLE..." : "Type in Serial Monitor...");
+  }
+}
+
+void handleInput() {
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
       if (serialInput.length() > 0) {
-        serialInput.trim();
-        if (serialInput == "!clear") {
-          lv_obj_clean(msg_list);
-          chatCount = 0;
-          histCount = 0;
-          add_sys_msg("Chat cleared.");
-        } else if (serialInput == "!imu") {
-          if (imuOK) {
-            float ax, ay, az;
-            qmi_read_accel(ax, ay, az);
-            float angle = atan2(ay, az) * 180.0 / PI;
-            String msg = "IMU: ax=" + String(ax,2) + " ay=" + String(ay,2) + " az=" + String(az,2) + " angle=" + String(angle,1) + " rot=" + String(currentRotation);
-            add_sys_msg(msg.c_str());
-            Serial.println("[IMU] " + msg);
-          } else {
-            add_sys_msg("IMU not detected");
-          }
-        } else if (serialInput == "!wifi") {
-          switchToScreen(SCR_WIFI_SELECT);
-        } else if (serialInput == "!settings") {
-          switchToScreen(SCR_SETTINGS);
-        } else if (serialInput.startsWith("!bright ")) {
-          int val = serialInput.substring(8).toInt();
-          if (val >= 0 && val <= 100) {
-            currentBrightness = map(val, 0, 100, 0, 255);
-            add_sys_msg(("Brightness: " + String(val) + "%").c_str());
-          }
-        } else {
-          if (currentScreen != SCR_MAIN) switchToScreen(SCR_MAIN);
-          add_user_msg(serialInput.c_str());
-          lv_label_set_text(input_label, ("> " + serialInput).c_str());
-          sendToGroq(serialInput);
-          lv_label_set_text(input_label, "Type in Serial Monitor...");
-        }
+        processInput(serialInput, false);
         serialInput = "";
       }
-    } else {
+    } else if (c == '\b' || c == 127) {
+      if (serialInput.length() > 0) {
+        serialInput.remove(serialInput.length() - 1);
+      }
+    } else if (c == 27) {
+      Serial.read();
+      Serial.read();
+    } else if (c >= 32) {
       serialInput += c;
     }
   }
 }
 
 // ===== JARVIS LOGO SPLASH =====
+extern const lv_img_dsc_t espressif_logo;
+
 static lv_obj_t *scr_splash = NULL;
 
 void showSplash() {
   scr_splash = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(scr_splash, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_color(scr_splash, lv_color_hex(0x000000), 0);
   lv_obj_set_style_bg_opa(scr_splash, LV_OPA_COVER, 0);
   lv_scr_load(scr_splash);
 
-  lv_obj_t *title = lv_label_create(scr_splash);
-  lv_label_set_text(title, "J A R V I S");
-  lv_obj_set_style_text_font(title, &noto_latin_14, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(title, LV_ALIGN_CENTER, 0, -30);
-
-  lv_obj_t *sub = lv_label_create(scr_splash);
-  lv_label_set_text(sub, "ESP32-S3 AI Terminal");
-  lv_obj_set_style_text_font(sub, &font_msg_12, 0);
-  lv_obj_set_style_text_color(sub, lv_color_hex(0x9ca3af), 0);
-  lv_obj_align(sub, LV_ALIGN_CENTER, 0, -6);
-
-  lv_obj_t *ver = lv_label_create(scr_splash);
-  lv_label_set_text(ver, "v1.0 | Powered by Groq");
-  lv_obj_set_style_text_font(ver, &font_msg_12, 0);
-  lv_obj_set_style_text_color(ver, lv_color_hex(0x6b7280), 0);
-  lv_obj_align(ver, LV_ALIGN_CENTER, 0, 10);
-
-  lv_obj_t *loadtxt = lv_label_create(scr_splash);
-  lv_label_set_text(loadtxt, "Initializing...");
-  lv_obj_set_style_text_font(loadtxt, &font_msg_12, 0);
-  lv_obj_set_style_text_color(loadtxt, lv_color_hex(0x22c55e), 0);
-  lv_obj_align(loadtxt, LV_ALIGN_CENTER, 0, 30);
+  lv_obj_t *logo_img = lv_img_create(scr_splash);
+  lv_img_set_src(logo_img, &espressif_logo);
+  lv_obj_align(logo_img, LV_ALIGN_CENTER, 0, 0);
 
   lv_refr_now(NULL);
-  delay(2500);
+  delay(3000);
 }
 
 // ===== WIFI CONNECT STATE =====
@@ -997,15 +1501,56 @@ void setup() {
   wifiStartMs = millis();
 
   Serial.println("[JARVIS] Ready. Type messages below.");
-  Serial.println("Commands: !clear !wifi !settings !bright <0-100>");
+  Serial.println("Commands: !clear !wifi !settings !bright <0-100> !net !rotate");
+  Serial.println("Telnet: After WiFi connects, run: telnet <esp-ip> 23");
+
+  Serial.println("[BOOT] Trying SD card auto-play...");
+  if (movie_alloc_buffers()) {
+    delay(500);
+    sdSPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+    bool sdOk = SD.begin(SD_CS, sdSPI, 40000000);
+    Serial.printf("[BOOT] SD.begin(CS=%d) = %s\n", SD_CS, sdOk ? "OK" : "FAIL");
+    if (sdOk) {
+      File meta = SD.open("/MOVIE/meta.txt", FILE_READ);
+      Serial.printf("[BOOT] meta.txt = %s\n", meta ? "FOUND" : "NOT FOUND");
+        if (meta) {
+        String metaStr = meta.readString();
+        meta.close();
+        Serial.printf("[BOOT] meta.txt content: %s\n", metaStr.c_str());
+        int w, h, totalFrames;
+        float fps;
+        if (sscanf(metaStr.c_str(), "%d %d %d %f", &w, &h, &totalFrames, &fps) == 4) {
+          movieTotalFrames = totalFrames;
+          movieFrameMs = (unsigned long)(1000.0 / fps);
+          movieFrameIdx = 0;
+          movieFpsCount = 0;
+          movieFpsLastTime = millis();
+          movieMode = MOVIE_SD;
+          moviePaused = false;
+          autoRotateEnabled = false;
+          movieDisplayActive = true;
+          gfx->setRotation(1);
+          gfx->fillScreen(0x0000);
+          Serial.printf("[BOOT] SD movie: %d frames @ %.1f fps\n", totalFrames, fps);
+          rgb_green();
+          return;
+        }
+      }
+      SD.end();
+    }
+    movie_free_buffers();
+  }
+  Serial.println("[BOOT] No SD movie found, starting normal UI.");
 }
 
 // ===== LOOP =====
 void loop() {
   handleButton();
-  handleSerialInput();
+  handleInput();
   check_auto_rotation();
+  telnet_handle();
   lv_timer_handler();
+  movie_tick();
 
   if (wifiConnecting) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -1014,9 +1559,10 @@ void loop() {
       lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
       rgb_green(); delay(300); rgb_off();
       add_sys_msg(("WiFi connected: " + WiFi.localIP().toString()).c_str());
-      add_sys_msg("Type query in Serial Monitor...");
-      lv_label_set_text(input_label, "Type in Serial Monitor...");
+      add_sys_msg("Telnet: open terminal -> telnet <ip> 23");
+      lv_label_set_text(input_label, "Type a message...");
       Serial.println("[JARVIS] WiFi connected: " + WiFi.localIP().toString());
+      telnet_init();
     } else if (millis() - wifiStartMs > WIFI_TIMEOUT_MS) {
       wifiConnecting = false;
       lv_label_set_text(lbl_wifi, "WiFi: Failed");

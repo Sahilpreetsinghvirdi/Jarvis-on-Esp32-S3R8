@@ -53,7 +53,7 @@ static uint8_t buf1[SCR_W * LV_BUF_LINES * 2];
 static uint8_t buf2[SCR_W * LV_BUF_LINES * 2];
 
 // ===== SCREENS =====
-enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT, SCR_BRIGHTNESS, SCR_BLE_CONFIG };
+enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT, SCR_BRIGHTNESS, SCR_BLE_CONFIG, SCR_BLE_PAIRING };
 static ScreenID currentScreen = SCR_DASHBOARD;
 static ScreenID previousScreen = SCR_DASHBOARD;
 
@@ -147,6 +147,12 @@ static lv_style_t style_sdmenu_selected;
 // ===== BLE CONFIG SCREEN =====
 static lv_obj_t *scr_ble_config = NULL;
 static lv_obj_t *ble_status_label = NULL;
+
+// ===== BLE PAIRING SCREEN =====
+static lv_obj_t *scr_ble_pairing = NULL;
+static bool blePairingPending = false;
+static bool blePairingAccepted = false;
+static String blePendingName = "";
 
 // ===== BRIGHTNESS SCREEN =====
 static lv_obj_t *scr_brightness = NULL;
@@ -1254,6 +1260,60 @@ void ui_create_ble_config() {
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
+// ===== BLE PAIRING CONFIRMATION SCREEN =====
+static lv_obj_t *ble_pairing_device_label = NULL;
+
+void ui_create_ble_pairing() {
+  scr_ble_pairing = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_ble_pairing, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(scr_ble_pairing, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr_ble_pairing, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(scr_ble_pairing);
+  lv_label_set_text(title, ">> BLE PAIRING");
+  lv_obj_set_style_text_font(title, &font_msg_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xfbbf24), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
+
+  lv_obj_t *line = lv_obj_create(scr_ble_pairing);
+  lv_obj_set_size(line, SCR_W - 40, 1);
+  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
+  lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *msg = lv_label_create(scr_ble_pairing);
+  lv_label_set_text(msg, "A device is requesting");
+  lv_obj_set_style_text_font(msg, &font_msg_12, 0);
+  lv_obj_set_style_text_color(msg, lv_color_hex(0xd1d5db), 0);
+  lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 50);
+
+  lv_obj_t *msg2 = lv_label_create(scr_ble_pairing);
+  lv_label_set_text(msg2, "to connect via Bluetooth");
+  lv_obj_set_style_text_font(msg2, &font_msg_12, 0);
+  lv_obj_set_style_text_color(msg2, lv_color_hex(0xd1d5db), 0);
+  lv_obj_align(msg2, LV_ALIGN_TOP_MID, 0, 68);
+
+  ble_pairing_device_label = lv_label_create(scr_ble_pairing);
+  lv_label_set_text(ble_pairing_device_label, "PC");
+  lv_obj_set_style_text_font(ble_pairing_device_label, &font_msg_14, 0);
+  lv_obj_set_style_text_color(ble_pairing_device_label, lv_color_hex(0x60a5fa), 0);
+  lv_obj_align(ble_pairing_device_label, LV_ALIGN_TOP_MID, 0, 92);
+
+  lv_obj_t *accept = lv_label_create(scr_ble_pairing);
+  lv_label_set_text(accept, "1tap = Accept");
+  lv_obj_set_style_text_font(accept, &font_msg_14, 0);
+  lv_obj_set_style_text_color(accept, lv_color_hex(0x22c55e), 0);
+  lv_obj_align(accept, LV_ALIGN_TOP_MID, 0, 120);
+
+  lv_obj_t *reject = lv_label_create(scr_ble_pairing);
+  lv_label_set_text(reject, "2tap = Reject");
+  lv_obj_set_style_text_font(reject, &font_msg_14, 0);
+  lv_obj_set_style_text_color(reject, lv_color_hex(0xef4444), 0);
+  lv_obj_align(reject, LV_ALIGN_TOP_MID, 0, 140);
+}
+
 // ===== CHAT DISPLAY =====
 void switchToScreen(ScreenID id) {
   previousScreen = currentScreen;
@@ -1305,6 +1365,9 @@ void switchToScreen(ScreenID id) {
     case SCR_BLE_CONFIG:
       lv_scr_load(scr_ble_config);
       break;
+    case SCR_BLE_PAIRING:
+      lv_scr_load(scr_ble_pairing);
+      break;
   }
 }
 
@@ -1320,6 +1383,13 @@ void goBack() {
     case SCR_WIFI_SELECT: switchToScreen(SCR_SETTINGS); break;
     case SCR_BRIGHTNESS: switchToScreen(SCR_SETTINGS); break;
     case SCR_BLE_CONFIG: ble_stop(); switchToScreen(SCR_DASHBOARD); break;
+    case SCR_BLE_PAIRING:
+      blePairingPending = false;
+      blePairingAccepted = false;
+      ble_stop();
+      switchToScreen(SCR_BLE_CONFIG);
+      ble_start();
+      break;
   }
 }
 
@@ -2147,6 +2217,14 @@ static void doSelect() {
       wifiStartMs = millis();
       switchToScreen(SCR_JARVIS);
     }
+  } else if (currentScreen == SCR_BLE_PAIRING) {
+    blePairingAccepted = true;
+    blePairingPending = false;
+    if (ble_status_label) {
+      lv_label_set_text(ble_status_label, "Paired! Waiting for data...");
+      lv_obj_set_style_text_color(ble_status_label, lv_color_hex(0x22c55e), 0);
+    }
+    switchToScreen(SCR_BLE_CONFIG);
   }
 }
 
@@ -2293,12 +2371,15 @@ void handleButton() {
 class BleServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *pServer) override {
     bleDeviceConnected = true;
-    Serial.println("[BLE] Client connected");
+    blePairingPending = true;
+    Serial.println("[BLE] Client connected - waiting for pairing accept");
   }
   void onDisconnect(BLEServer *pServer) override {
     bleDeviceConnected = false;
+    blePairingPending = false;
+    blePairingAccepted = false;
     Serial.println("[BLE] Client disconnected");
-    if (!bleCredentialsReceived) {
+    if (!bleCredentialsReceived && bleStarted) {
       BLEDevice::startAdvertising();
       Serial.println("[BLE] Restarting advertising...");
     }
@@ -2307,6 +2388,10 @@ class BleServerCallbacks : public BLEServerCallbacks {
 
 class BleCharCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) override {
+    if (!blePairingAccepted) {
+      Serial.println("[BLE] Write rejected - pairing not accepted");
+      return;
+    }
     String val = pChar->getValue();
     Serial.println("[BLE] Received: " + val);
     int ssidIdx = val.indexOf("\"ssid\":\"");
@@ -2472,6 +2557,7 @@ void setup() {
   ui_create_photo_list();
   ui_create_brightness();
   ui_create_ble_config();
+  ui_create_ble_pairing();
 
   showSplash();
 
@@ -2558,6 +2644,13 @@ void loop() {
 
   if (bleStarted && currentScreen == SCR_BLE_CONFIG) {
     ble_check_credentials();
+  }
+
+  if (blePairingPending && currentScreen != SCR_BLE_PAIRING) {
+    if (ble_pairing_device_label) {
+      lv_label_set_text(ble_pairing_device_label, "PC wants to connect");
+    }
+    switchToScreen(SCR_BLE_PAIRING);
   }
 
   delay(2);

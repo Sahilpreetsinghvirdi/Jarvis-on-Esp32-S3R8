@@ -1294,10 +1294,13 @@ static const uint8_t espressif_logo_map[] = {
 };
 
 const lv_img_dsc_t espressif_logo = {
-  .header.always_zero = 0,
+  .header.magic = LV_IMAGE_HEADER_MAGIC,
+  .header.cf = LV_COLOR_FORMAT_NATIVE,
+  .header.flags = 0,
   .header.w = 240,
   .header.h = 43,
-  .header.cf = LV_IMG_CF_TRUE_COLOR,
+  .header.stride = 240 * 2,
+  .header.reserved_2 = 0,
   .data_size = 20640,
   .data = espressif_logo_map,
 };

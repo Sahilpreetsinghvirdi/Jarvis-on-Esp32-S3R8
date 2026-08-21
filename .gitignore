@@ -26,3 +26,5 @@ package.json
 fonts/
 noto_*.c
 !jarvis_lvgl/noto_*.c
+
+lv_conf.h

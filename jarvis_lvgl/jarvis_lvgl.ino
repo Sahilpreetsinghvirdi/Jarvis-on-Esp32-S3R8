@@ -43,10 +43,9 @@ Arduino_GFX *gfx = new Arduino_ST7789(
 
 // ===== LVGL =====
 #define LV_BUF_LINES 40
-static lv_disp_draw_buf_t disp_buf;
-static lv_color_t buf1[SCR_W * LV_BUF_LINES];
-static lv_color_t buf2[SCR_W * LV_BUF_LINES];
-static lv_disp_drv_t disp_drv;
+static lv_display_t *lv_display = NULL;
+static uint8_t buf1[SCR_W * LV_BUF_LINES * 2];
+static uint8_t buf2[SCR_W * LV_BUF_LINES * 2];
 
 // ===== SCREENS =====
 enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT };
@@ -408,15 +407,15 @@ void check_auto_rotation() {
 static bool movieDisplayActive = false;
 static unsigned long totalPacketsReceived = 0;
 
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   if (movieDisplayActive) {
-    lv_disp_flush_ready(disp);
+    lv_display_flush_ready(disp);
     return;
   }
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
-  gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)color_p, w, h);
-  lv_disp_flush_ready(disp);
+  gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
+  lv_display_flush_ready(disp);
 }
 
 // ===== COMPOSITE FONTS (Latin -> Devanagari -> Gurmukhi -> Math) =====
@@ -505,22 +504,16 @@ void ui_init_styles() {
   lv_style_set_text_font(&style_wifi_selected, &font_msg_14);
 
   lv_style_init(&style_settings_item);
-  lv_style_set_bg_color(&style_settings_item, lv_color_hex(0x111827));
-  lv_style_set_bg_opa(&style_settings_item, LV_OPA_COVER);
-  lv_style_set_radius(&style_settings_item, 4);
-  lv_style_set_pad_all(&style_settings_item, 6);
-  lv_style_set_border_width(&style_settings_item, 1);
-  lv_style_set_border_color(&style_settings_item, lv_color_hex(0x1e3a5f));
+  lv_style_set_bg_opa(&style_settings_item, LV_OPA_TRANSP);
+  lv_style_set_border_width(&style_settings_item, 0);
+  lv_style_set_pad_all(&style_settings_item, 0);
   lv_style_set_text_color(&style_settings_item, lv_color_hex(0x9ca3af));
   lv_style_set_text_font(&style_settings_item, &font_msg_14);
 
   lv_style_init(&style_settings_selected);
-  lv_style_set_bg_color(&style_settings_selected, lv_color_hex(0x1e3a5f));
-  lv_style_set_bg_opa(&style_settings_selected, LV_OPA_COVER);
-  lv_style_set_radius(&style_settings_selected, 4);
-  lv_style_set_pad_all(&style_settings_selected, 6);
-  lv_style_set_border_width(&style_settings_selected, 2);
-  lv_style_set_border_color(&style_settings_selected, lv_color_hex(0xfbbf24));
+  lv_style_set_bg_opa(&style_settings_selected, LV_OPA_TRANSP);
+  lv_style_set_border_width(&style_settings_selected, 0);
+  lv_style_set_pad_all(&style_settings_selected, 0);
   lv_style_set_text_color(&style_settings_selected, lv_color_hex(0xfbbf24));
   lv_style_set_text_font(&style_settings_selected, &font_msg_14);
 
@@ -529,22 +522,16 @@ void ui_init_styles() {
   lv_style_set_text_font(&style_title, &font_msg_14);
 
   lv_style_init(&style_dash_item);
-  lv_style_set_bg_color(&style_dash_item, lv_color_hex(0x111827));
-  lv_style_set_bg_opa(&style_dash_item, LV_OPA_COVER);
-  lv_style_set_radius(&style_dash_item, 6);
-  lv_style_set_pad_all(&style_dash_item, 8);
-  lv_style_set_border_width(&style_dash_item, 1);
-  lv_style_set_border_color(&style_dash_item, lv_color_hex(0x1e3a5f));
-  lv_style_set_text_color(&style_dash_item, lv_color_hex(0x9ca3af));
+  lv_style_set_bg_opa(&style_dash_item, LV_OPA_TRANSP);
+  lv_style_set_border_width(&style_dash_item, 0);
+  lv_style_set_pad_all(&style_dash_item, 0);
+  lv_style_set_text_color(&style_dash_item, lv_color_hex(0x6b7280));
   lv_style_set_text_font(&style_dash_item, &font_msg_14);
 
   lv_style_init(&style_dash_selected);
-  lv_style_set_bg_color(&style_dash_selected, lv_color_hex(0x1e3a5f));
-  lv_style_set_bg_opa(&style_dash_selected, LV_OPA_COVER);
-  lv_style_set_radius(&style_dash_selected, 6);
-  lv_style_set_pad_all(&style_dash_selected, 8);
-  lv_style_set_border_width(&style_dash_selected, 2);
-  lv_style_set_border_color(&style_dash_selected, lv_color_hex(0x22c55e));
+  lv_style_set_bg_opa(&style_dash_selected, LV_OPA_TRANSP);
+  lv_style_set_border_width(&style_dash_selected, 0);
+  lv_style_set_pad_all(&style_dash_selected, 0);
   lv_style_set_text_color(&style_dash_selected, lv_color_hex(0x22c55e));
   lv_style_set_text_font(&style_dash_selected, &font_msg_14);
 
@@ -606,48 +593,38 @@ void ui_create_dashboard() {
   scr_dashboard = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scr_dashboard, lv_color_hex(0x0a0e17), 0);
   lv_obj_set_style_bg_opa(scr_dashboard, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr_dashboard, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *title = lv_label_create(scr_dashboard);
   lv_label_set_text(title, "J A R V I S");
   lv_obj_set_style_text_font(title, &font_msg_14, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
 
   lv_obj_t *line = lv_obj_create(scr_dashboard);
   lv_obj_set_size(line, SCR_W - 40, 1);
-  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 32);
+  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 34);
   lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
   lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(line, 0, 0);
   lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *menu = lv_obj_create(scr_dashboard);
-  lv_obj_set_size(menu, SCR_W - 40, SCR_H - 70);
-  lv_obj_align(menu, LV_ALIGN_TOP_MID, 0, 40);
-  lv_obj_set_style_bg_opa(menu, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(menu, 0, 0);
-  lv_obj_set_style_pad_all(menu, 0, 0);
-  lv_obj_set_flex_flow(menu, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(menu, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_row(menu, 8, 0);
-
+  int startY = 52;
+  int rowH = 26;
   for (int i = 0; i < DASH_COUNT; i++) {
-    lv_obj_t *item = lv_obj_create(menu);
-    lv_obj_set_size(item, SCR_W - 50, 30);
-    lv_obj_set_height(item, 30);
-    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lbl = lv_label_create(item);
-    lv_label_set_text(lbl, dashLabels[i]);
-    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_t *lbl = lv_label_create(scr_dashboard);
+    lv_obj_set_style_text_font(lbl, &font_msg_14, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 24, startY + i * rowH);
+    lv_obj_set_width(lbl, SCR_W - 48);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
 
     if (i == dashIdx) {
-      lv_obj_add_style(item, &style_dash_selected, 0);
+      lv_label_set_text_fmt(lbl, "> %s", dashLabels[i]);
       lv_obj_set_style_text_color(lbl, lv_color_hex(0x22c55e), 0);
     } else {
-      lv_obj_add_style(item, &style_dash_item, 0);
+      lv_label_set_text(lbl, dashLabels[i]);
     }
-    dash_items[i] = item;
+    dash_items[i] = lbl;
   }
 
   lv_obj_t *hint = lv_label_create(scr_dashboard);
@@ -658,16 +635,16 @@ void ui_create_dashboard() {
 }
 
 void updateDashboard() {
+  int startY = 52;
+  int rowH = 26;
   for (int i = 0; i < DASH_COUNT; i++) {
     if (!dash_items[i]) continue;
-    lv_obj_t *lbl = lv_obj_get_child(dash_items[i], 0);
-    lv_obj_remove_style_all(dash_items[i]);
     if (i == dashIdx) {
-      lv_obj_add_style(dash_items[i], &style_dash_selected, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0x22c55e), 0);
+      lv_label_set_text_fmt(dash_items[i], "> %s", dashLabels[i]);
+      lv_obj_set_style_text_color(dash_items[i], lv_color_hex(0x22c55e), 0);
     } else {
-      lv_obj_add_style(dash_items[i], &style_dash_item, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+      lv_label_set_text(dash_items[i], dashLabels[i]);
+      lv_obj_set_style_text_color(dash_items[i], lv_color_hex(0x9ca3af), 0);
     }
   }
 }
@@ -677,40 +654,37 @@ void ui_create_sd_menu() {
   scr_sd_menu = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scr_sd_menu, lv_color_hex(0x0a0e17), 0);
   lv_obj_set_style_bg_opa(scr_sd_menu, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr_sd_menu, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *title = lv_label_create(scr_sd_menu);
   lv_label_set_text(title, ">> SD CARD");
   lv_obj_set_style_text_font(title, &font_msg_14, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
 
-  lv_obj_t *menu = lv_obj_create(scr_sd_menu);
-  lv_obj_set_size(menu, SCR_W - 40, SCR_H - 70);
-  lv_obj_align(menu, LV_ALIGN_TOP_MID, 0, 40);
-  lv_obj_set_style_bg_opa(menu, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(menu, 0, 0);
-  lv_obj_set_style_pad_all(menu, 0, 0);
-  lv_obj_set_flex_flow(menu, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(menu, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_row(menu, 8, 0);
+  lv_obj_t *line = lv_obj_create(scr_sd_menu);
+  lv_obj_set_size(line, SCR_W - 40, 1);
+  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
+  lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
+  int startY = 52;
+  int rowH = 26;
   for (int i = 0; i < SDMENU_COUNT; i++) {
-    lv_obj_t *item = lv_obj_create(menu);
-    lv_obj_set_size(item, SCR_W - 50, 30);
-    lv_obj_set_height(item, 30);
-    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lbl = lv_label_create(item);
-    lv_label_set_text(lbl, sdMenuLabels[i]);
-    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_t *lbl = lv_label_create(scr_sd_menu);
+    lv_obj_set_style_text_font(lbl, &font_msg_14, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 24, startY + i * rowH);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
 
     if (i == sdmenuIdx) {
-      lv_obj_add_style(item, &style_sdmenu_selected, 0);
+      lv_label_set_text_fmt(lbl, "> %s", sdMenuLabels[i]);
       lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(item, &style_sdmenu_item, 0);
+      lv_label_set_text(lbl, sdMenuLabels[i]);
     }
-    sdmenu_items[i] = item;
+    sdmenu_items[i] = lbl;
   }
 
   lv_obj_t *hint = lv_label_create(scr_sd_menu);
@@ -723,14 +697,12 @@ void ui_create_sd_menu() {
 void updateSdMenu() {
   for (int i = 0; i < SDMENU_COUNT; i++) {
     if (!sdmenu_items[i]) continue;
-    lv_obj_t *lbl = lv_obj_get_child(sdmenu_items[i], 0);
-    lv_obj_remove_style_all(sdmenu_items[i]);
     if (i == sdmenuIdx) {
-      lv_obj_add_style(sdmenu_items[i], &style_sdmenu_selected, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+      lv_label_set_text_fmt(sdmenu_items[i], "> %s", sdMenuLabels[i]);
+      lv_obj_set_style_text_color(sdmenu_items[i], lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(sdmenu_items[i], &style_sdmenu_item, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+      lv_label_set_text(sdmenu_items[i], sdMenuLabels[i]);
+      lv_obj_set_style_text_color(sdmenu_items[i], lv_color_hex(0x9ca3af), 0);
     }
   }
 }
@@ -775,23 +747,19 @@ void ui_populate_video_list() {
   lv_label_set_text_fmt(video_title, ">> %d VIDEO(S)", videoCount);
 
   for (int i = 0; i < videoCount; i++) {
-    lv_obj_t *item = lv_obj_create(video_list);
-    lv_obj_set_size(item, SCR_W - 16, 26);
-    lv_obj_set_height(item, 26);
-    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lbl = lv_label_create(item);
-    lv_label_set_text_fmt(lbl, "> %s", videoNames[i].c_str());
+    lv_obj_t *lbl = lv_label_create(video_list);
     lv_obj_set_style_text_font(lbl, &font_msg_14, 0);
-    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_width(lbl, SCR_W - 24);
+    lv_obj_set_style_pad_hor(lbl, 2, 0);
 
     if (i == videoIdx) {
-      lv_obj_add_style(item, &style_sdmenu_selected, 0);
+      lv_label_set_text_fmt(lbl, "> %s", videoNames[i].c_str());
       lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(item, &style_sdmenu_item, 0);
+      lv_label_set_text_fmt(lbl, "  %s", videoNames[i].c_str());
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
     }
-    video_items[i] = item;
+    video_items[i] = lbl;
   }
 }
 
@@ -827,14 +795,12 @@ void ui_create_video_list() {
 void updateVideoListSelection() {
   for (int i = 0; i < videoCount; i++) {
     if (!video_items[i]) continue;
-    lv_obj_t *lbl = lv_obj_get_child(video_items[i], 0);
-    lv_obj_remove_style_all(video_items[i]);
     if (i == videoIdx) {
-      lv_obj_add_style(video_items[i], &style_sdmenu_selected, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+      lv_label_set_text_fmt(video_items[i], "> %s", videoNames[i].c_str());
+      lv_obj_set_style_text_color(video_items[i], lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(video_items[i], &style_sdmenu_item, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+      lv_label_set_text_fmt(video_items[i], "  %s", videoNames[i].c_str());
+      lv_obj_set_style_text_color(video_items[i], lv_color_hex(0x9ca3af), 0);
     }
   }
 }
@@ -883,26 +849,22 @@ void ui_populate_photo_list() {
   lv_label_set_text_fmt(photo_title, ">> %d PHOTOS", photoCount);
 
   for (int i = 0; i < photoCount; i++) {
-    lv_obj_t *item = lv_obj_create(photo_list);
-    lv_obj_set_size(item, SCR_W - 16, 22);
-    lv_obj_set_height(item, 22);
-    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lbl = lv_label_create(item);
+    lv_obj_t *lbl = lv_label_create(photo_list);
     const char *orient = (photoOrientations[i] == 'P') ? "[P] " : "[L] ";
     String dispName = photoDisplayNames[i];
     if (dispName.length() > 28) dispName = dispName.substring(0, 28) + "...";
     lv_label_set_text_fmt(lbl, "%s%s", orient, dispName.c_str());
     lv_obj_set_style_text_font(lbl, &font_msg_12, 0);
-    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_width(lbl, SCR_W - 24);
+    lv_obj_set_style_pad_hor(lbl, 2, 0);
 
     if (i == photoIdx) {
-      lv_obj_add_style(item, &style_sdmenu_selected, 0);
+      lv_label_set_text_fmt(lbl, "> %s%s", orient, dispName.c_str());
       lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(item, &style_sdmenu_item, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
     }
-    photo_items[i] = item;
+    photo_items[i] = lbl;
   }
 }
 
@@ -938,14 +900,15 @@ void ui_create_photo_list() {
 void updatePhotoListSelection() {
   for (int i = 0; i < photoCount; i++) {
     if (!photo_items[i]) continue;
-    lv_obj_t *lbl = lv_obj_get_child(photo_items[i], 0);
-    lv_obj_remove_style_all(photo_items[i]);
+    const char *orient = (photoOrientations[i] == 'P') ? "[P] " : "[L] ";
+    String dispName = photoDisplayNames[i];
+    if (dispName.length() > 28) dispName = dispName.substring(0, 28) + "...";
     if (i == photoIdx) {
-      lv_obj_add_style(photo_items[i], &style_sdmenu_selected, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+      lv_label_set_text_fmt(photo_items[i], "> %s%s", orient, dispName.c_str());
+      lv_obj_set_style_text_color(photo_items[i], lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(photo_items[i], &style_sdmenu_item, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+      lv_label_set_text_fmt(photo_items[i], "%s%s", orient, dispName.c_str());
+      lv_obj_set_style_text_color(photo_items[i], lv_color_hex(0x9ca3af), 0);
     }
   }
 }
@@ -1075,54 +1038,50 @@ void ui_create_settings() {
   scr_settings = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scr_settings, lv_color_hex(0x0a0e17), 0);
   lv_obj_set_style_bg_opa(scr_settings, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr_settings, LV_OBJ_FLAG_SCROLLABLE);
 
   settings_title = lv_label_create(scr_settings);
   lv_label_set_text(settings_title, ">> SETTINGS");
   lv_obj_set_style_text_font(settings_title, &font_msg_14, 0);
   lv_obj_set_style_text_color(settings_title, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(settings_title, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_align(settings_title, LV_ALIGN_TOP_MID, 0, 14);
 
-  settings_list = lv_obj_create(scr_settings);
-  lv_obj_set_size(settings_list, SCR_W - 12, SCR_H - 46);
-  lv_obj_align(settings_list, LV_ALIGN_TOP_MID, 0, 28);
-  lv_obj_set_style_bg_color(settings_list, lv_color_hex(0x0a0e17), 0);
-  lv_obj_set_style_bg_opa(settings_list, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(settings_list, 0, 0);
-  lv_obj_set_style_pad_all(settings_list, 2, 0);
-  lv_obj_set_flex_flow(settings_list, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(settings_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-  lv_obj_set_style_pad_row(settings_list, 4, 0);
+  lv_obj_t *line = lv_obj_create(scr_settings);
+  lv_obj_set_size(line, SCR_W - 40, 1);
+  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
+  lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(line, 0, 0);
+  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
+  int startY = 44;
+  int rowH = 20;
   for (int i = 0; i < SETTINGS_COUNT; i++) {
-    lv_obj_t *item = lv_obj_create(settings_list);
-    lv_obj_set_size(item, SCR_W - 20, 26);
-    lv_obj_set_height(item, 26);
-    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *lbl = lv_label_create(scr_settings);
+    lv_obj_set_style_text_font(lbl, &font_msg_12, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 24, startY + i * rowH);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
 
-    lv_obj_t *lbl = lv_label_create(item);
-    lv_label_set_text(lbl, settingsLabels[i]);
-    lv_obj_set_style_text_font(lbl, &font_msg_14, 0);
-    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
-
-    lv_obj_t *val = lv_label_create(item);
+    lv_obj_t *val = lv_label_create(scr_settings);
     lv_obj_set_style_text_font(val, &font_msg_12, 0);
-    lv_obj_align(val, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_align(val, LV_ALIGN_TOP_RIGHT, -24, startY + i * rowH);
+    lv_obj_set_style_text_color(val, lv_color_hex(0x6b7280), 0);
 
     if (i == settingsIdx) {
-      lv_obj_add_style(item, &style_settings_selected, 0);
+      lv_label_set_text_fmt(lbl, "> %s", settingsLabels[i]);
       lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(item, &style_settings_item, 0);
+      lv_label_set_text(lbl, settingsLabels[i]);
     }
-    settings_items[i] = item;
+    settings_items[i] = lbl;
     settings_values[i] = val;
   }
 
   lv_obj_t *hint = lv_label_create(scr_settings);
-  lv_label_set_text(hint, "1tap=next | 2tap=back | 3tap=select");
+  lv_label_set_text(hint, "1tap=Enter | Hold=Down | 2Hold=Up | 2tap=Back");
   lv_obj_set_style_text_font(hint, &font_msg_12, 0);
   lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
-  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
 void updateSettingsDisplay() {
@@ -1145,14 +1104,12 @@ void updateSettingsDisplay() {
 
   for (int i = 0; i < SETTINGS_COUNT; i++) {
     if (!settings_items[i]) continue;
-    lv_obj_t *lbl = lv_obj_get_child(settings_items[i], 0);
-    lv_obj_remove_style_all(settings_items[i]);
     if (i == settingsIdx) {
-      lv_obj_add_style(settings_items[i], &style_settings_selected, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0xfbbf24), 0);
+      lv_label_set_text_fmt(settings_items[i], "> %s", settingsLabels[i]);
+      lv_obj_set_style_text_color(settings_items[i], lv_color_hex(0xfbbf24), 0);
     } else {
-      lv_obj_add_style(settings_items[i], &style_settings_item, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0x9ca3af), 0);
+      lv_label_set_text(settings_items[i], settingsLabels[i]);
+      lv_obj_set_style_text_color(settings_items[i], lv_color_hex(0x9ca3af), 0);
     }
   }
 }
@@ -1390,124 +1347,109 @@ void sendToGroq(String query) {
   streamBuffer = "";
 }
 
-// ===== BUTTON HANDLER =====
-static int btnState = HIGH, lastBtnState = HIGH;
-static unsigned long btnPressTime = 0, lastPressTime = 0;
-static unsigned long lastScrollTime = 0;
-static int pressCount = 0;
-static bool btnHeld = false;
+// ===== WIFI CONNECT STATE =====
+#define WIFI_TIMEOUT_MS 15000
+static bool wifiConnecting = false;
+static unsigned long wifiStartMs = 0;
 
-void handleButton() {
-  int reading = digitalRead(BTN_PIN);
-  unsigned long now = millis();
+// ===== INPUT =====
+String serialInput = "";
+bool lastInputWasBT = false;
 
-  if (reading != lastBtnState) {
-    if (reading == LOW) {
-      btnPressTime = now;
-      pressCount++;
-      lastPressTime = now;
+void processInput(const String &input, bool fromBT) {
+  lastInputWasBT = fromBT;
+  if (input.length() == 0) return;
+  String cmd = input;
+  cmd.trim();
+
+  auto reply = [&](const String &msg) {
+    if (fromBT) telnet_send(msg); else Serial.println(msg);
+  };
+
+  if (cmd == "!clear") {
+    lv_obj_clean(msg_list);
+    chatCount = 0;
+    histCount = 0;
+    add_sys_msg("Chat cleared.");
+  } else if (cmd == "!imu") {
+    if (imuOK) {
+      float ax, ay, az;
+      qmi_read_accel(ax, ay, az);
+      float angle = atan2(ay, az) * 180.0 / PI;
+      String msg = "IMU: ax=" + String(ax,2) + " ay=" + String(ay,2) + " az=" + String(az,2) + " angle=" + String(angle,1) + " rot=" + String(currentRotation);
+      add_sys_msg(msg.c_str());
+      reply("[IMU] " + msg);
     } else {
-      unsigned long holdTime = now - btnPressTime;
-      if (holdTime < 400 && pressCount == 1) {
-        if (photoViewActive) {
-          // Single click in photo view: nothing for now (future zoom)
-        } else if (currentScreen == SCR_DASHBOARD) {
-          switch (dashIdx) {
-            case 0: switchToScreen(SCR_JARVIS); break;
-            case 1: switchToScreen(SCR_SD_MENU); break;
-            case 2: switchToScreen(SCR_SETTINGS); break;
-          }
-        } else if (currentScreen == SCR_SD_MENU) {
-          switch (sdmenuIdx) {
-            case 0: switchToScreen(SCR_VIDEO_LIST); break;
-            case 1: switchToScreen(SCR_PHOTO_LIST); break;
-          }
-        } else if (currentScreen == SCR_VIDEO_LIST) {
-          if (videoCount > 0 && videoIdx < videoCount) {
-            currentVideoPath = videoPaths[videoIdx];
-            if (movieMode != MOVIE_OFF) movie_sd_stop();
-            movie_sd_start();
-          }
-        } else if (currentScreen == SCR_PHOTO_LIST) {
-          if (photoCount > 0 && photoIdx < photoCount) {
-            movieDisplayActive = true;
-            currentScreen = SCR_PHOTO_VIEW;
-            photo_view_start(photoIdx);
-          }
-        } else if (currentScreen == SCR_JARVIS) {
-          // Single click on chat: nothing (scroll is on hold)
-        } else if (currentScreen == SCR_SETTINGS) {
-          switch (settingsIdx) {
-            case 0: switchToScreen(SCR_WIFI_SELECT); break;
-            case 2: ledEnabled = !ledEnabled; if (!ledEnabled) rgb_off(); else rgb_cyan(); updateSettingsDisplay(); break;
-            case 3: autoRotateEnabled = !autoRotateEnabled; updateSettingsDisplay(); break;
-            case 5: switchToScreen(SCR_DASHBOARD); break;
-          }
-        } else if (currentScreen == SCR_WIFI_SELECT) {
-          if (wifiCount > 0) {
-            String ssid = wifiSSIDs[wifiSelectedIdx];
-            WiFi.disconnect();
-            WiFi.begin(ssid.c_str(), "");
-            add_sys_msg(("Connecting to " + ssid + "...").c_str());
-            wifiConnecting = true;
-            wifiStartMs = millis();
-            switchToScreen(SCR_JARVIS);
-          }
-        }
-        pressCount = 0;
-      } else if (holdTime < 400 && pressCount >= 2) {
-        if (photoViewActive) {
-          photo_view_stop();
-        } else if (movieMode != MOVIE_OFF) {
-          if (movieMode == MOVIE_WIFI) movie_wifi_stop();
-          else movie_sd_stop();
-        } else {
-          goBack();
-        }
-        pressCount = 0;
+      add_sys_msg("IMU not detected");
+    }
+  } else if (cmd == "!rotate") {
+    autoRotateEnabled = !autoRotateEnabled;
+    String msg = "Auto-rotate: " + String(autoRotateEnabled ? "ON" : "OFF");
+    add_sys_msg(msg.c_str());
+    reply("[JARVIS] " + msg);
+  } else if (cmd == "!wifi") {
+    switchToScreen(SCR_WIFI_SELECT);
+  } else if (cmd == "!settings") {
+    switchToScreen(SCR_SETTINGS);
+  } else if (cmd == "!dash") {
+    switchToScreen(SCR_DASHBOARD);
+  } else if (cmd == "!sd") {
+    switchToScreen(SCR_SD_MENU);
+  } else if (cmd == "!net") {
+    String msg = "Telnet: " + WiFi.localIP().toString() + ":23 | Client: " + String(telnetConnected ? "Yes" : "No");
+    add_sys_msg(msg.c_str());
+    reply("[NET] " + msg);
+  } else if (cmd == "!movie wifi") {
+    if (movieMode != MOVIE_OFF) movie_wifi_stop();
+    movie_wifi_start();
+    reply("[MOVIE] WiFi streaming started. IP=" + WiFi.localIP().toString() + " UDP:" + String(UDP_PORT));
+  } else if (cmd == "!movie sd") {
+    if (movieMode != MOVIE_OFF) movie_sd_stop();
+    movie_sd_start();
+  } else if (cmd == "!movie stop") {
+    if (movieMode == MOVIE_WIFI) movie_wifi_stop();
+    else if (movieMode == MOVIE_SD) movie_sd_stop();
+    reply("[MOVIE] Stopped");
+  } else if (cmd == "!movie pause") {
+    movie_toggle_pause();
+  } else if (cmd == "!help") {
+    String msg = "Commands: !clear !dash !sd !wifi !settings !bright <0-100> !net !rotate !imu\nMovie: !movie wifi|sd|stop|pause";
+    add_sys_msg(msg.c_str());
+    reply("[JARVIS] " + msg);
+  } else if (cmd.startsWith("!bright ")) {
+    int val = cmd.substring(8).toInt();
+    if (val >= 0 && val <= 100) {
+      currentBrightness = map(val, 0, 100, 0, 255);
+      add_sys_msg(("Brightness: " + String(val) + "%").c_str());
+    }
+  } else {
+    if (currentScreen != SCR_JARVIS) switchToScreen(SCR_JARVIS);
+    add_user_msg(cmd.c_str());
+    lv_label_set_text(input_label, ("> " + cmd).c_str());
+    sendToGroq(cmd);
+    lv_label_set_text(input_label, fromBT ? "Type on BLE..." : "Type in Serial Monitor...");
+  }
+}
+
+void handleInput() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (serialInput.length() > 0) {
+        processInput(serialInput, false);
+        serialInput = "";
       }
-      btnHeld = false;
+    } else if (c == '\b' || c == 127) {
+      if (serialInput.length() > 0) {
+        serialInput.remove(serialInput.length() - 1);
+      }
+    } else if (c == 27) {
+      Serial.read();
+      Serial.read();
+    } else if (c >= 32) {
+      serialInput += c;
     }
   }
-
-  if (btnState == LOW && (now - btnPressTime > 400)) {
-    if (!btnHeld) {
-      btnHeld = true;
-      lastScrollTime = 0;
-    }
-    if (now - lastScrollTime > 100) {
-      lastScrollTime = now;
-      if (photoViewActive) {
-        if (pressCount == 1) photo_view_next();
-        else if (pressCount >= 2) photo_view_prev();
-      } else if (currentScreen == SCR_JARVIS) {
-        if (pressCount == 1) lv_obj_scroll_by(msg_list, 0, 40, LV_ANIM_ON);
-        else if (pressCount >= 2) lv_obj_scroll_by(msg_list, 0, -40, LV_ANIM_ON);
-      } else if (currentScreen == SCR_DASHBOARD) {
-        if (pressCount == 1) { dashIdx++; if (dashIdx >= DASH_COUNT) dashIdx = 0; updateDashboard(); }
-        else if (pressCount >= 2) { dashIdx--; if (dashIdx < 0) dashIdx = DASH_COUNT - 1; updateDashboard(); }
-      } else if (currentScreen == SCR_SD_MENU) {
-        if (pressCount == 1) { sdmenuIdx++; if (sdmenuIdx >= SDMENU_COUNT) sdmenuIdx = 0; updateSdMenu(); }
-        else if (pressCount >= 2) { sdmenuIdx--; if (sdmenuIdx < 0) sdmenuIdx = SDMENU_COUNT - 1; updateSdMenu(); }
-      } else if (currentScreen == SCR_VIDEO_LIST) {
-        if (pressCount == 1) { videoIdx++; if (videoIdx >= videoCount) videoIdx = 0; updateVideoListSelection(); }
-        else if (pressCount >= 2) { videoIdx--; if (videoIdx < 0) videoIdx = videoCount - 1; updateVideoListSelection(); }
-      } else if (currentScreen == SCR_PHOTO_LIST) {
-        if (pressCount == 1) { photoIdx++; if (photoIdx >= photoCount) photoIdx = 0; updatePhotoListSelection(); }
-        else if (pressCount >= 2) { photoIdx--; if (photoIdx < 0) photoIdx = photoCount - 1; updatePhotoListSelection(); }
-      } else if (currentScreen == SCR_SETTINGS) {
-        if (pressCount == 1) { settingsIdx++; if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0; updateSettingsDisplay(); }
-        else if (pressCount >= 2) { settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay(); }
-      } else if (currentScreen == SCR_WIFI_SELECT) {
-        if (pressCount == 1) { wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection(); }
-        else if (pressCount >= 2) { wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection(); }
-      }
-    }
-  }
-
-  if (now - lastPressTime > 600 && pressCount > 0) pressCount = 0;
-  lastBtnState = reading;
-  btnState = reading;
 }
 
 // ===== MOVIE FUNCTIONS =====
@@ -1928,103 +1870,171 @@ void photo_view_prev() {
   else photo_view_start(photoCount - 1);
 }
 
-// ===== INPUT =====
-String serialInput = "";
-bool lastInputWasBT = false;
+// ===== BUTTON STATE MACHINE =====
+// States: IDLE -> PRESSED -> (release) -> WAIT_TAP -> (timeout=process tap)
+//                                  \-> (hold>400ms) -> HOLDING -> (release) -> IDLE
+#define TAP_WINDOW_MS   350   // wait this long after a tap for another tap
+#define HOLD_THRESHOLD  400   // ms held to count as "hold"
+#define SCROLL_INTERVAL 120   // ms between scroll steps while holding
 
-void processInput(const String &input, bool fromBT) {
-  lastInputWasBT = fromBT;
-  if (input.length() == 0) return;
-  String cmd = input;
-  cmd.trim();
+enum BtnFSM { BTN_IDLE, BTN_PRESSED, BTN_WAIT_TAP, BTN_HOLDING };
+static BtnFSM btnFSM = BTN_IDLE;
+static unsigned long btnDownTime = 0;
+static unsigned long btnReleaseTime = 0;
+static unsigned long lastScrollTime = 0;
+static int tapCount = 0;
 
-  auto reply = [&](const String &msg) {
-    if (fromBT) telnet_send(msg); else Serial.println(msg);
-  };
-
-  if (cmd == "!clear") {
-    lv_obj_clean(msg_list);
-    chatCount = 0;
-    histCount = 0;
-    add_sys_msg("Chat cleared.");
-  } else if (cmd == "!imu") {
-    if (imuOK) {
-      float ax, ay, az;
-      qmi_read_accel(ax, ay, az);
-      float angle = atan2(ay, az) * 180.0 / PI;
-      String msg = "IMU: ax=" + String(ax,2) + " ay=" + String(ay,2) + " az=" + String(az,2) + " angle=" + String(angle,1) + " rot=" + String(currentRotation);
-      add_sys_msg(msg.c_str());
-      reply("[IMU] " + msg);
-    } else {
-      add_sys_msg("IMU not detected");
+static void doSelect() {
+  if (photoViewActive) {
+    photo_view_next();
+  } else if (currentScreen == SCR_DASHBOARD) {
+    switch (dashIdx) {
+      case 0: switchToScreen(SCR_JARVIS); break;
+      case 1: switchToScreen(SCR_SD_MENU); break;
+      case 2: switchToScreen(SCR_SETTINGS); break;
     }
-  } else if (cmd == "!rotate") {
-    autoRotateEnabled = !autoRotateEnabled;
-    String msg = "Auto-rotate: " + String(autoRotateEnabled ? "ON" : "OFF");
-    add_sys_msg(msg.c_str());
-    reply("[JARVIS] " + msg);
-  } else if (cmd == "!wifi") {
-    switchToScreen(SCR_WIFI_SELECT);
-  } else if (cmd == "!settings") {
-    switchToScreen(SCR_SETTINGS);
-  } else if (cmd == "!dash") {
-    switchToScreen(SCR_DASHBOARD);
-  } else if (cmd == "!sd") {
-    switchToScreen(SCR_SD_MENU);
-  } else if (cmd == "!net") {
-    String msg = "Telnet: " + WiFi.localIP().toString() + ":23 | Client: " + String(telnetConnected ? "Yes" : "No");
-    add_sys_msg(msg.c_str());
-    reply("[NET] " + msg);
-  } else if (cmd == "!movie wifi") {
-    if (movieMode != MOVIE_OFF) movie_wifi_stop();
-    movie_wifi_start();
-    reply("[MOVIE] WiFi streaming started. IP=" + WiFi.localIP().toString() + " UDP:" + String(UDP_PORT));
-  } else if (cmd == "!movie sd") {
-    if (movieMode != MOVIE_OFF) movie_sd_stop();
-    movie_sd_start();
-  } else if (cmd == "!movie stop") {
-    if (movieMode == MOVIE_WIFI) movie_wifi_stop();
-    else if (movieMode == MOVIE_SD) movie_sd_stop();
-    reply("[MOVIE] Stopped");
-  } else if (cmd == "!movie pause") {
-    movie_toggle_pause();
-  } else if (cmd == "!help") {
-    String msg = "Commands: !clear !dash !sd !wifi !settings !bright <0-100> !net !rotate !imu\nMovie: !movie wifi|sd|stop|pause";
-    add_sys_msg(msg.c_str());
-    reply("[JARVIS] " + msg);
-  } else if (cmd.startsWith("!bright ")) {
-    int val = cmd.substring(8).toInt();
-    if (val >= 0 && val <= 100) {
-      currentBrightness = map(val, 0, 100, 0, 255);
-      add_sys_msg(("Brightness: " + String(val) + "%").c_str());
+  } else if (currentScreen == SCR_SD_MENU) {
+    switch (sdmenuIdx) {
+      case 0: switchToScreen(SCR_VIDEO_LIST); break;
+      case 1: switchToScreen(SCR_PHOTO_LIST); break;
     }
-  } else {
-    if (currentScreen != SCR_JARVIS) switchToScreen(SCR_JARVIS);
-    add_user_msg(cmd.c_str());
-    lv_label_set_text(input_label, ("> " + cmd).c_str());
-    sendToGroq(cmd);
-    lv_label_set_text(input_label, fromBT ? "Type on BLE..." : "Type in Serial Monitor...");
+  } else if (currentScreen == SCR_VIDEO_LIST) {
+    if (videoCount > 0 && videoIdx < videoCount) {
+      currentVideoPath = videoPaths[videoIdx];
+      if (movieMode != MOVIE_OFF) movie_sd_stop();
+      movie_sd_start();
+    }
+  } else if (currentScreen == SCR_PHOTO_LIST) {
+    if (photoCount > 0 && photoIdx < photoCount) {
+      movieDisplayActive = true;
+      currentScreen = SCR_PHOTO_VIEW;
+      photo_view_start(photoIdx);
+    }
+  } else if (currentScreen == SCR_JARVIS) {
+    // single tap on chat: nothing
+  } else if (currentScreen == SCR_SETTINGS) {
+    switch (settingsIdx) {
+      case 0: switchToScreen(SCR_WIFI_SELECT); break;
+      case 2: ledEnabled = !ledEnabled; if (!ledEnabled) rgb_off(); else rgb_cyan(); updateSettingsDisplay(); break;
+      case 3: autoRotateEnabled = !autoRotateEnabled; updateSettingsDisplay(); break;
+      case 5: switchToScreen(SCR_DASHBOARD); break;
+    }
+  } else if (currentScreen == SCR_WIFI_SELECT) {
+    if (wifiCount > 0) {
+      String ssid = wifiSSIDs[wifiSelectedIdx];
+      WiFi.disconnect();
+      WiFi.begin(ssid.c_str(), "");
+      add_sys_msg(("Connecting to " + ssid + "...").c_str());
+      wifiConnecting = true;
+      wifiStartMs = millis();
+      switchToScreen(SCR_JARVIS);
+    }
   }
 }
 
-void handleInput() {
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (serialInput.length() > 0) {
-        processInput(serialInput, false);
-        serialInput = "";
+static void doBack() {
+  if (photoViewActive) {
+    photo_view_stop();
+  } else if (movieMode != MOVIE_OFF) {
+    if (movieMode == MOVIE_WIFI) movie_wifi_stop();
+    else movie_sd_stop();
+  } else {
+    goBack();
+  }
+}
+
+static void doScrollDown() {
+  if (photoViewActive) {
+    photo_view_next();
+  } else if (currentScreen == SCR_JARVIS) {
+    lv_obj_scroll_by(msg_list, 0, 40, LV_ANIM_ON);
+  } else if (currentScreen == SCR_DASHBOARD) {
+    dashIdx++; if (dashIdx >= DASH_COUNT) dashIdx = 0; updateDashboard();
+  } else if (currentScreen == SCR_SD_MENU) {
+    sdmenuIdx++; if (sdmenuIdx >= SDMENU_COUNT) sdmenuIdx = 0; updateSdMenu();
+  } else if (currentScreen == SCR_VIDEO_LIST) {
+    videoIdx++; if (videoIdx >= videoCount) videoIdx = 0; updateVideoListSelection();
+  } else if (currentScreen == SCR_PHOTO_LIST) {
+    photoIdx++; if (photoIdx >= photoCount) photoIdx = 0; updatePhotoListSelection();
+  } else if (currentScreen == SCR_SETTINGS) {
+    settingsIdx++; if (settingsIdx >= SETTINGS_COUNT) settingsIdx = 0; updateSettingsDisplay();
+  } else if (currentScreen == SCR_WIFI_SELECT) {
+    wifiSelectedIdx++; if (wifiSelectedIdx >= wifiCount) wifiSelectedIdx = 0; updateWifiSelection();
+  }
+}
+
+static void doScrollUp() {
+  if (photoViewActive) {
+    photo_view_prev();
+  } else if (currentScreen == SCR_JARVIS) {
+    lv_obj_scroll_by(msg_list, 0, -40, LV_ANIM_ON);
+  } else if (currentScreen == SCR_DASHBOARD) {
+    dashIdx--; if (dashIdx < 0) dashIdx = DASH_COUNT - 1; updateDashboard();
+  } else if (currentScreen == SCR_SD_MENU) {
+    sdmenuIdx--; if (sdmenuIdx < 0) sdmenuIdx = SDMENU_COUNT - 1; updateSdMenu();
+  } else if (currentScreen == SCR_VIDEO_LIST) {
+    videoIdx--; if (videoIdx < 0) videoIdx = videoCount - 1; updateVideoListSelection();
+  } else if (currentScreen == SCR_PHOTO_LIST) {
+    photoIdx--; if (photoIdx < 0) photoIdx = photoCount - 1; updatePhotoListSelection();
+  } else if (currentScreen == SCR_SETTINGS) {
+    settingsIdx--; if (settingsIdx < 0) settingsIdx = SETTINGS_COUNT - 1; updateSettingsDisplay();
+  } else if (currentScreen == SCR_WIFI_SELECT) {
+    wifiSelectedIdx--; if (wifiSelectedIdx < 0) wifiSelectedIdx = wifiCount - 1; updateWifiSelection();
+  }
+}
+
+void handleButton() {
+  int reading = digitalRead(BTN_PIN);
+  unsigned long now = millis();
+  bool pressed = (reading == LOW);
+
+  switch (btnFSM) {
+    case BTN_IDLE:
+      if (pressed) {
+        btnDownTime = now;
+        tapCount = 1;
+        btnFSM = BTN_PRESSED;
       }
-    } else if (c == '\b' || c == 127) {
-      if (serialInput.length() > 0) {
-        serialInput.remove(serialInput.length() - 1);
+      break;
+
+    case BTN_PRESSED:
+      if (!pressed) {
+        unsigned long holdTime = now - btnDownTime;
+        if (holdTime >= HOLD_THRESHOLD) {
+          btnFSM = BTN_IDLE;
+        } else {
+          btnReleaseTime = now;
+          btnFSM = BTN_WAIT_TAP;
+        }
+      } else if (now - btnDownTime >= HOLD_THRESHOLD) {
+        btnFSM = BTN_HOLDING;
+        lastScrollTime = 0;
       }
-    } else if (c == 27) {
-      Serial.read();
-      Serial.read();
-    } else if (c >= 32) {
-      serialInput += c;
-    }
+      break;
+
+    case BTN_WAIT_TAP:
+      if (pressed) {
+        tapCount++;
+        btnDownTime = now;
+        btnFSM = BTN_PRESSED;
+      } else if (now - btnReleaseTime >= TAP_WINDOW_MS) {
+        if (tapCount == 1) doSelect();
+        else doBack();
+        btnFSM = BTN_IDLE;
+      }
+      break;
+
+    case BTN_HOLDING:
+      if (!pressed) {
+        btnFSM = BTN_IDLE;
+      } else {
+        if (now - lastScrollTime >= SCROLL_INTERVAL) {
+          lastScrollTime = now;
+          if (tapCount == 1) doScrollDown();
+          else doScrollUp();
+        }
+      }
+      break;
   }
 }
 
@@ -2037,20 +2047,17 @@ void showSplash() {
   scr_splash = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scr_splash, lv_color_hex(0x000000), 0);
   lv_obj_set_style_bg_opa(scr_splash, LV_OPA_COVER, 0);
-  lv_scr_load(scr_splash);
+  lv_screen_load(scr_splash);
 
-  lv_obj_t *logo_img = lv_img_create(scr_splash);
-  lv_img_set_src(logo_img, &espressif_logo);
+  lv_obj_t *logo_img = lv_image_create(scr_splash);
+  lv_image_set_src(logo_img, &espressif_logo);
   lv_obj_align(logo_img, LV_ALIGN_CENTER, 0, 0);
 
   lv_refr_now(NULL);
   delay(3000);
 }
 
-// ===== WIFI CONNECT STATE =====
-static bool wifiConnecting = false;
-static unsigned long wifiStartMs = 0;
-#define WIFI_TIMEOUT_MS 15000
+// ===== WIFI CONNECT STATE (redeclared for access) =====
 
 // ===== SETUP =====
 void setup() {
@@ -2071,14 +2078,11 @@ void setup() {
   qmi_init();
 
   lv_init();
-  lv_disp_draw_buf_init(&disp_buf, buf1, buf2, SCR_W * LV_BUF_LINES);
+  lv_tick_set_cb(millis);
 
-  lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = SCR_W;
-  disp_drv.ver_res = SCR_H;
-  disp_drv.flush_cb = my_disp_flush;
-  disp_drv.draw_buf = &disp_buf;
-  lv_disp_drv_register(&disp_drv);
+  lv_display = lv_display_create(SCR_W, SCR_H);
+  lv_display_set_flush_cb(lv_display, my_disp_flush);
+  lv_display_set_buffers(lv_display, buf1, buf2, sizeof(buf1), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
   setup_fonts();
   ui_init_styles();

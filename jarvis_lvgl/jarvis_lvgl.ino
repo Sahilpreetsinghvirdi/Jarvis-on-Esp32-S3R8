@@ -118,7 +118,9 @@ static int photoIdx = 0;
 // ===== PHOTO VIEWER STATE =====
 static bool photoViewActive = false;
 static int currentPhotoIdx = 0;
-static bool photoZoomed = false;
+static float photoZoomLevel = 1.0f;
+static bool zoomHoldActive = false;
+static unsigned long zoomHoldStart = 0;
 
 // ===== STYLES =====
 static lv_style_t style_user;
@@ -1904,9 +1906,9 @@ void photo_view_start(int idx) {
     f.close();
     gfx->fillScreen(0x0000);
 
-    if (photoZoomed) {
-      int srcW = w * 2 / 3;
-      int srcH = h * 2 / 3;
+    if (photoZoomLevel > 1.0f) {
+      int srcW = (int)(w / photoZoomLevel);
+      int srcH = (int)(h / photoZoomLevel);
       int srcX = (w - srcW) / 2;
       int srcY = (h - srcH) / 2;
       uint16_t rowBuf[320];
@@ -1957,7 +1959,8 @@ void photo_view_start(int idx) {
 
 void photo_view_stop() {
   photoViewActive = false;
-  photoZoomed = false;
+  photoZoomLevel = 1.0f;
+  zoomHoldActive = false;
   gfx->setRotation(1);
   movieDisplayActive = false;
   autoRotateEnabled = true;
@@ -1966,7 +1969,15 @@ void photo_view_stop() {
 }
 
 void photo_view_toggle_zoom() {
-  photoZoomed = !photoZoomed;
+  if (photoZoomLevel > 1.0f) {
+    photoZoomLevel = 1.0f;
+  } else {
+    photoZoomLevel = 1.5f;
+  }
+  photo_view_start(currentPhotoIdx);
+}
+
+void photo_view_render() {
   photo_view_start(currentPhotoIdx);
 }
 
@@ -2151,12 +2162,31 @@ void handleButton() {
 
     case BTN_HOLDING:
       if (!pressed) {
+        zoomHoldActive = false;
         btnFSM = BTN_IDLE;
       } else {
-        if (now - lastScrollTime >= SCROLL_INTERVAL) {
-          lastScrollTime = now;
-          if (tapCount == 1) doScrollDown();
-          else doScrollUp();
+        if (photoViewActive && tapCount >= 3) {
+          if (!zoomHoldActive && now - btnDownTime >= HOLD_THRESHOLD) {
+            zoomHoldActive = true;
+            zoomHoldStart = now;
+            if (photoZoomLevel <= 1.0f) {
+              photoZoomLevel = 1.5f;
+              photo_view_start(currentPhotoIdx);
+            }
+          } else if (zoomHoldActive && now - zoomHoldStart >= 1000) {
+            if (now - lastScrollTime >= 50) {
+              lastScrollTime = now;
+              photoZoomLevel += 0.02f;
+              if (photoZoomLevel > 4.0f) photoZoomLevel = 4.0f;
+              photo_view_start(currentPhotoIdx);
+            }
+          }
+        } else {
+          if (now - lastScrollTime >= SCROLL_INTERVAL) {
+            lastScrollTime = now;
+            if (tapCount == 1) doScrollDown();
+            else doScrollUp();
+          }
         }
       }
       break;

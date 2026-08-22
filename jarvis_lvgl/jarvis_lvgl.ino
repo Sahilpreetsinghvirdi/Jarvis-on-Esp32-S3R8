@@ -825,32 +825,35 @@ void updateVideoListSelection() {
 void sd_scan_photos() {
   photoCount = 0;
   if (!sdReady) return;
-  File meta = SD.open("/PHOTOS/meta.txt", FILE_READ);
-  if (!meta) {
-    Serial.println("[SD] No /PHOTOS/meta.txt found");
-    return;
-  }
-  String countStr = meta.readStringUntil('\n');
-  photoCount = countStr.toInt();
-  if (photoCount > MAX_PHOTOS) photoCount = MAX_PHOTOS;
-  for (int i = 0; i < photoCount; i++) {
-    String line = meta.readStringUntil('\n');
-    line.trim();
-    int sp1 = line.indexOf(' ');
-    if (sp1 > 0) {
-      photoFileNames[i] = line.substring(0, sp1);
-      String rest = line.substring(sp1 + 1);
-      int sp2 = rest.indexOf(' ');
-      if (sp2 > 0) {
-        photoOrientations[i] = rest.charAt(0);
-        photoDisplayNames[i] = rest.substring(sp2 + 1);
-      } else {
-        photoOrientations[i] = rest.charAt(0);
-        photoDisplayNames[i] = photoFileNames[i];
+  const char *photoFolders[] = { "/PHOTOS", "/PF" };
+  for (int f = 0; f < 2; f++) {
+    String metaPath = String(photoFolders[f]) + "/meta.txt";
+    File meta = SD.open(metaPath.c_str(), FILE_READ);
+    if (!meta) continue;
+    String countStr = meta.readStringUntil('\n');
+    int folderCount = countStr.toInt();
+    for (int j = 0; j < folderCount && photoCount < MAX_PHOTOS; j++) {
+      String line = meta.readStringUntil('\n');
+      line.trim();
+      int sp1 = line.indexOf(' ');
+      if (sp1 > 0) {
+        String fname = line.substring(0, sp1);
+        String rest = line.substring(sp1 + 1);
+        if (rest.length() > 0) {
+          photoOrientations[photoCount] = rest.charAt(0);
+          int sp2 = rest.indexOf(' ');
+          if (sp2 > 0) photoDisplayNames[photoCount] = rest.substring(sp2 + 1);
+          else photoDisplayNames[photoCount] = fname;
+        } else {
+          photoOrientations[photoCount] = 'L';
+          photoDisplayNames[photoCount] = fname;
+        }
+        photoFileNames[photoCount] = String(photoFolders[f]) + "/" + fname;
+        photoCount++;
       }
     }
+    meta.close();
   }
-  meta.close();
   Serial.printf("[SD] Found %d photo(s)\n", photoCount);
 }
 
@@ -1983,7 +1986,7 @@ void photo_view_start(int idx) {
   if (orient == 'P') gfx->setRotation(0);
   else gfx->setRotation(1);
 
-  String path = "/PHOTOS/" + photoFileNames[idx];
+  String path = photoFileNames[idx];
   File f = SD.open(path.c_str(), FILE_READ);
   if (f) {
     f.read((uint8_t *)photoBuf, w * h * 2);

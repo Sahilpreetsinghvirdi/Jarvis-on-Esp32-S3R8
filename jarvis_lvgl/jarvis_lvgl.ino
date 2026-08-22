@@ -1199,51 +1199,51 @@ void ui_create_portal() {
   lv_label_set_text(title, ">> WIFI SETUP");
   lv_obj_set_style_text_font(title, &font_msg_14, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0xfbbf24), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
 
   lv_obj_t *line = lv_obj_create(scr_portal);
   lv_obj_set_size(line, SCR_W - 40, 1);
-  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 26);
   lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
   lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(line, 0, 0);
   lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *l1 = lv_label_create(scr_portal);
-  lv_label_set_text(l1, "1. Connect phone to");
+  lv_label_set_text(l1, "1.Connect to WiFi:");
   lv_obj_set_style_text_font(l1, &font_msg_12, 0);
   lv_obj_set_style_text_color(l1, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 48);
+  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 32);
 
   lv_obj_t *ssid_label = lv_label_create(scr_portal);
-  lv_label_set_text(ssid_label, "WiFi: JARVIS-CONFIG");
+  lv_label_set_text(ssid_label, "JARVIS-CONFIG");
   lv_obj_set_style_text_font(ssid_label, &font_msg_14, 0);
   lv_obj_set_style_text_color(ssid_label, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(ssid_label, LV_ALIGN_TOP_MID, 0, 66);
+  lv_obj_align(ssid_label, LV_ALIGN_TOP_MID, 0, 48);
 
   lv_obj_t *l2 = lv_label_create(scr_portal);
-  lv_label_set_text(l2, "2. Open browser to:");
+  lv_label_set_text(l2, "2.Open browser:");
   lv_obj_set_style_text_font(l2, &font_msg_12, 0);
   lv_obj_set_style_text_color(l2, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 88);
+  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 68);
 
   lv_obj_t *url = lv_label_create(scr_portal);
   lv_label_set_text(url, "192.168.4.1");
   lv_obj_set_style_text_font(url, &font_msg_14, 0);
   lv_obj_set_style_text_color(url, lv_color_hex(0x22c55e), 0);
-  lv_obj_align(url, LV_ALIGN_TOP_MID, 0, 106);
+  lv_obj_align(url, LV_ALIGN_TOP_MID, 0, 84);
 
   lv_obj_t *l3 = lv_label_create(scr_portal);
-  lv_label_set_text(l3, "3. Enter WiFi credentials");
+  lv_label_set_text(l3, "3.Enter WiFi & press Connect");
   lv_obj_set_style_text_font(l3, &font_msg_12, 0);
   lv_obj_set_style_text_color(l3, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 128);
+  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 104);
 
   portal_status_label = lv_label_create(scr_portal);
   lv_label_set_text(portal_status_label, "Waiting...");
   lv_obj_set_style_text_font(portal_status_label, &font_msg_12, 0);
   lv_obj_set_style_text_color(portal_status_label, lv_color_hex(0xfbbf24), 0);
-  lv_obj_align(portal_status_label, LV_ALIGN_TOP_MID, 0, 148);
+  lv_obj_align(portal_status_label, LV_ALIGN_TOP_MID, 0, 124);
 
   lv_obj_t *hint = lv_label_create(scr_portal);
   lv_label_set_text(hint, "2tap=Back");
@@ -2401,19 +2401,19 @@ void portal_handle() {
     prefs.end();
     Serial.println("[PORTAL] Credentials saved: " + portalRecvSSID);
 
-    if (portal_status_label) {
-      lv_label_set_text(portal_status_label, "Connecting to WiFi...");
-      lv_obj_set_style_text_color(portal_status_label, lv_color_hex(0x22c55e), 0);
-    }
-    lv_refr_now(NULL);
-
     WiFi.disconnect();
+    delay(200);
     WiFi.begin(portalRecvSSID.c_str(), portalRecvPass.c_str());
     wifiConnecting = true;
     wifiStartMs = millis();
     portalCredsReceived = false;
     portalRecvSSID = "";
     portalRecvPass = "";
+
+    lv_label_set_text(lbl_wifi, "WiFi: Connecting...");
+    lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xfbbf24), 0);
+    lv_label_set_text(input_label, "Connecting to WiFi...");
+    switchToScreen(SCR_JARVIS);
   }
 }
 
@@ -2572,12 +2572,6 @@ void loop() {
       if (currentScreen == SCR_JARVIS) {
         lv_label_set_text(lbl_wifi, "WiFi: Failed");
         lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xef4444), 0);
-      }
-      if (currentScreen == SCR_PORTAL && !portalActive) {
-        if (portal_status_label) {
-          lv_label_set_text(portal_status_label, "WiFi failed. 2tap=Back");
-          lv_obj_set_style_text_color(portal_status_label, lv_color_hex(0xef4444), 0);
-        }
       }
       Serial.println("[JARVIS] WiFi connection timed out.");
     }

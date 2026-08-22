@@ -63,22 +63,32 @@ Write-Host "Found: $($found.Name)" -ForegroundColor Green
 $bleDevice = AsTask ([Windows.Devices.Bluetooth.BluetoothLEDevice]::FromIdAsync($found.Id)) ([Windows.Devices.Bluetooth.BluetoothLEDevice])
 if (-not $bleDevice) { Write-Host "ERROR: Connection failed!" -ForegroundColor Red; pause; exit 1 }
 Write-Host "Connected!" -ForegroundColor Green
+Write-Host "`n>>> APPROVE on the ESP32 screen now (1tap = Accept)" -ForegroundColor Yellow
+Read-Host "Press Enter after approving"
+
+Start-Sleep -Seconds 2
 
 $serviceUuid = [Guid]::Parse("12345678-1234-1234-1234-123456789abc")
 $charUuid = [Guid]::Parse("12345678-1234-1234-1234-123456789abd")
 
-$servicesResult = AsTask ($bleDevice.GetGattServicesAsync()) ([Windows.Devices.Bluetooth.GenericAttributeProfile.GattDeviceServicesResult])
 $targetService = $null
-foreach ($svc in $servicesResult.Services) {
-    if ($svc.Uuid -eq $serviceUuid) { $targetService = $svc; break }
-}
-if (-not $targetService) { Write-Host "ERROR: Service not found!" -ForegroundColor Red; $bleDevice.Dispose(); pause; exit 1 }
-
 $targetChar = $null
-foreach ($ch in $targetService.Characteristics) {
-    if ($ch.Uuid -eq $charUuid) { $targetChar = $ch; break }
+
+for ($retry = 0; $retry -lt 5; $retry++) {
+    $servicesResult = AsTask ($bleDevice.GetGattServicesAsync()) ([Windows.Devices.Bluetooth.GenericAttributeProfile.GattDeviceServicesResult])
+    foreach ($svc in $servicesResult.Services) {
+        if ($svc.Uuid -eq $serviceUuid) { $targetService = $svc; break }
+    }
+    if ($targetService) {
+        foreach ($ch in $targetService.Characteristics) {
+            if ($ch.Uuid -eq $charUuid) { $targetChar = $ch; break }
+        }
+    }
+    if ($targetChar) { break }
+    Write-Host "Waiting for service... ($($retry+1)/5)" -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
 }
-if (-not $targetChar) { Write-Host "ERROR: Characteristic not found!" -ForegroundColor Red; $bleDevice.Dispose(); pause; exit 1 }
+if (-not $targetChar) { Write-Host "ERROR: Service not found after retries!" -ForegroundColor Red; $bleDevice.Dispose(); pause; exit 1 }
 
 Write-Host ""
 $ssid = Read-Host "Enter WiFi SSID"

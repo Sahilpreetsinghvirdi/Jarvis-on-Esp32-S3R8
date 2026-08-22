@@ -8,12 +8,10 @@
 #include <WiFiClient.h>
 #include <WiFiServer.h>
 #include <WiFiUdp.h>
+#include <WebServer.h>
+#include <DNSServer.h>
 #include <SD.h>
 #include <SPI.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
 #include <Preferences.h>
 #include "fonts.h"
 
@@ -53,7 +51,7 @@ static uint8_t buf1[SCR_W * LV_BUF_LINES * 2];
 static uint8_t buf2[SCR_W * LV_BUF_LINES * 2];
 
 // ===== SCREENS =====
-enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT, SCR_BRIGHTNESS, SCR_BLE_CONFIG, SCR_BLE_PAIRING };
+enum ScreenID { SCR_DASHBOARD, SCR_JARVIS, SCR_SD_MENU, SCR_VIDEO_LIST, SCR_PHOTO_LIST, SCR_PHOTO_VIEW, SCR_SETTINGS, SCR_WIFI_SELECT, SCR_BRIGHTNESS, SCR_PORTAL };
 static ScreenID currentScreen = SCR_DASHBOARD;
 static ScreenID previousScreen = SCR_DASHBOARD;
 
@@ -144,15 +142,9 @@ static lv_style_t style_dash_selected;
 static lv_style_t style_sdmenu_item;
 static lv_style_t style_sdmenu_selected;
 
-// ===== BLE CONFIG SCREEN =====
-static lv_obj_t *scr_ble_config = NULL;
-static lv_obj_t *ble_status_label = NULL;
-
-// ===== BLE PAIRING SCREEN =====
-static lv_obj_t *scr_ble_pairing = NULL;
-static bool blePairingPending = false;
-static bool blePairingAccepted = false;
-static String blePendingName = "";
+// ===== PORTAL SCREEN =====
+static lv_obj_t *scr_portal = NULL;
+static lv_obj_t *portal_status_label = NULL;
 
 // ===== BRIGHTNESS SCREEN =====
 static lv_obj_t *scr_brightness = NULL;
@@ -1196,86 +1188,20 @@ void ui_create_brightness() {
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
-// ===== BLE WIFI CONFIG SCREEN =====
-void ui_create_ble_config() {
-  scr_ble_config = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(scr_ble_config, lv_color_hex(0x0a0e17), 0);
-  lv_obj_set_style_bg_opa(scr_ble_config, LV_OPA_COVER, 0);
-  lv_obj_clear_flag(scr_ble_config, LV_OBJ_FLAG_SCROLLABLE);
+// ===== WIFI PORTAL SCREEN =====
+void ui_create_portal() {
+  scr_portal = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr_portal, lv_color_hex(0x0a0e17), 0);
+  lv_obj_set_style_bg_opa(scr_portal, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr_portal, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *title = lv_label_create(scr_ble_config);
-  lv_label_set_text(title, ">> BLE WIFI SETUP");
-  lv_obj_set_style_text_font(title, &font_msg_14, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xfbbf24), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
-
-  lv_obj_t *line = lv_obj_create(scr_ble_config);
-  lv_obj_set_size(line, SCR_W - 40, 1);
-  lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 28);
-  lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
-  lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(line, 0, 0);
-  lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t *l1 = lv_label_create(scr_ble_config);
-  lv_label_set_text(l1, "On your PC, open PowerShell");
-  lv_obj_set_style_text_font(l1, &font_msg_12, 0);
-  lv_obj_set_style_text_color(l1, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 38);
-
-  lv_obj_t *l2 = lv_label_create(scr_ble_config);
-  lv_label_set_text(l2, "Paste this command:");
-  lv_obj_set_style_text_font(l2, &font_msg_12, 0);
-  lv_obj_set_style_text_color(l2, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 56);
-
-  lv_obj_t *cmd = lv_label_create(scr_ble_config);
-  lv_label_set_text(cmd, "powershell .\\wifi_cfg.ps1");
-  lv_obj_set_style_text_font(cmd, &font_msg_12, 0);
-  lv_obj_set_style_text_color(cmd, lv_color_hex(0x22c55e), 0);
-  lv_obj_align(cmd, LV_ALIGN_TOP_MID, 0, 74);
-
-  lv_obj_t *l3 = lv_label_create(scr_ble_config);
-  lv_label_set_text(l3, "Or get script from GitHub repo:");
-  lv_obj_set_style_text_font(l3, &font_msg_12, 0);
-  lv_obj_set_style_text_color(l3, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 96);
-
-  lv_obj_t *l4 = lv_label_create(scr_ble_config);
-  lv_label_set_text(l4, "Sahilpreetsinghvirdi/Jarvis-on-Esp32-S3R8");
-  lv_obj_set_style_text_font(l4, &font_msg_12, 0);
-  lv_obj_set_style_text_color(l4, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(l4, LV_ALIGN_TOP_MID, 0, 110);
-
-  ble_status_label = lv_label_create(scr_ble_config);
-  lv_label_set_text(ble_status_label, "BLE advertising...");
-  lv_obj_set_style_text_font(ble_status_label, &font_msg_12, 0);
-  lv_obj_set_style_text_color(ble_status_label, lv_color_hex(0xfbbf24), 0);
-  lv_obj_align(ble_status_label, LV_ALIGN_TOP_MID, 0, 132);
-
-  lv_obj_t *hint = lv_label_create(scr_ble_config);
-  lv_label_set_text(hint, "2tap=Back");
-  lv_obj_set_style_text_font(hint, &font_msg_12, 0);
-  lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
-  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
-}
-
-// ===== BLE PAIRING CONFIRMATION SCREEN =====
-static lv_obj_t *ble_pairing_device_label = NULL;
-
-void ui_create_ble_pairing() {
-  scr_ble_pairing = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(scr_ble_pairing, lv_color_hex(0x0a0e17), 0);
-  lv_obj_set_style_bg_opa(scr_ble_pairing, LV_OPA_COVER, 0);
-  lv_obj_clear_flag(scr_ble_pairing, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t *title = lv_label_create(scr_ble_pairing);
-  lv_label_set_text(title, ">> BLE PAIRING");
+  lv_obj_t *title = lv_label_create(scr_portal);
+  lv_label_set_text(title, ">> WIFI SETUP");
   lv_obj_set_style_text_font(title, &font_msg_14, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0xfbbf24), 0);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
 
-  lv_obj_t *line = lv_obj_create(scr_ble_pairing);
+  lv_obj_t *line = lv_obj_create(scr_portal);
   lv_obj_set_size(line, SCR_W - 40, 1);
   lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 34);
   lv_obj_set_style_bg_color(line, lv_color_hex(0x1e3a5f), 0);
@@ -1283,35 +1209,47 @@ void ui_create_ble_pairing() {
   lv_obj_set_style_border_width(line, 0, 0);
   lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *msg = lv_label_create(scr_ble_pairing);
-  lv_label_set_text(msg, "A device is requesting");
-  lv_obj_set_style_text_font(msg, &font_msg_12, 0);
-  lv_obj_set_style_text_color(msg, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 50);
+  lv_obj_t *l1 = lv_label_create(scr_portal);
+  lv_label_set_text(l1, "1. Connect phone to");
+  lv_obj_set_style_text_font(l1, &font_msg_12, 0);
+  lv_obj_set_style_text_color(l1, lv_color_hex(0xd1d5db), 0);
+  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 48);
 
-  lv_obj_t *msg2 = lv_label_create(scr_ble_pairing);
-  lv_label_set_text(msg2, "to connect via Bluetooth");
-  lv_obj_set_style_text_font(msg2, &font_msg_12, 0);
-  lv_obj_set_style_text_color(msg2, lv_color_hex(0xd1d5db), 0);
-  lv_obj_align(msg2, LV_ALIGN_TOP_MID, 0, 68);
+  lv_obj_t *ssid_label = lv_label_create(scr_portal);
+  lv_label_set_text(ssid_label, "WiFi: JARVIS-CONFIG");
+  lv_obj_set_style_text_font(ssid_label, &font_msg_14, 0);
+  lv_obj_set_style_text_color(ssid_label, lv_color_hex(0x60a5fa), 0);
+  lv_obj_align(ssid_label, LV_ALIGN_TOP_MID, 0, 66);
 
-  ble_pairing_device_label = lv_label_create(scr_ble_pairing);
-  lv_label_set_text(ble_pairing_device_label, "PC");
-  lv_obj_set_style_text_font(ble_pairing_device_label, &font_msg_14, 0);
-  lv_obj_set_style_text_color(ble_pairing_device_label, lv_color_hex(0x60a5fa), 0);
-  lv_obj_align(ble_pairing_device_label, LV_ALIGN_TOP_MID, 0, 92);
+  lv_obj_t *l2 = lv_label_create(scr_portal);
+  lv_label_set_text(l2, "2. Open browser to:");
+  lv_obj_set_style_text_font(l2, &font_msg_12, 0);
+  lv_obj_set_style_text_color(l2, lv_color_hex(0xd1d5db), 0);
+  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 88);
 
-  lv_obj_t *accept = lv_label_create(scr_ble_pairing);
-  lv_label_set_text(accept, "1tap = Accept");
-  lv_obj_set_style_text_font(accept, &font_msg_14, 0);
-  lv_obj_set_style_text_color(accept, lv_color_hex(0x22c55e), 0);
-  lv_obj_align(accept, LV_ALIGN_TOP_MID, 0, 120);
+  lv_obj_t *url = lv_label_create(scr_portal);
+  lv_label_set_text(url, "192.168.4.1");
+  lv_obj_set_style_text_font(url, &font_msg_14, 0);
+  lv_obj_set_style_text_color(url, lv_color_hex(0x22c55e), 0);
+  lv_obj_align(url, LV_ALIGN_TOP_MID, 0, 106);
 
-  lv_obj_t *reject = lv_label_create(scr_ble_pairing);
-  lv_label_set_text(reject, "2tap = Reject");
-  lv_obj_set_style_text_font(reject, &font_msg_14, 0);
-  lv_obj_set_style_text_color(reject, lv_color_hex(0xef4444), 0);
-  lv_obj_align(reject, LV_ALIGN_TOP_MID, 0, 140);
+  lv_obj_t *l3 = lv_label_create(scr_portal);
+  lv_label_set_text(l3, "3. Enter WiFi credentials");
+  lv_obj_set_style_text_font(l3, &font_msg_12, 0);
+  lv_obj_set_style_text_color(l3, lv_color_hex(0xd1d5db), 0);
+  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 128);
+
+  portal_status_label = lv_label_create(scr_portal);
+  lv_label_set_text(portal_status_label, "Waiting...");
+  lv_obj_set_style_text_font(portal_status_label, &font_msg_12, 0);
+  lv_obj_set_style_text_color(portal_status_label, lv_color_hex(0xfbbf24), 0);
+  lv_obj_align(portal_status_label, LV_ALIGN_TOP_MID, 0, 148);
+
+  lv_obj_t *hint = lv_label_create(scr_portal);
+  lv_label_set_text(hint, "2tap=Back");
+  lv_obj_set_style_text_font(hint, &font_msg_12, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x6b7280), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
 // ===== CHAT DISPLAY =====
@@ -1362,11 +1300,8 @@ void switchToScreen(ScreenID id) {
       lv_scr_load(scr_brightness);
       break;
     }
-    case SCR_BLE_CONFIG:
-      lv_scr_load(scr_ble_config);
-      break;
-    case SCR_BLE_PAIRING:
-      lv_scr_load(scr_ble_pairing);
+    case SCR_PORTAL:
+      lv_scr_load(scr_portal);
       break;
   }
 }
@@ -1382,14 +1317,7 @@ void goBack() {
     case SCR_SETTINGS: switchToScreen(SCR_DASHBOARD); break;
     case SCR_WIFI_SELECT: switchToScreen(SCR_SETTINGS); break;
     case SCR_BRIGHTNESS: switchToScreen(SCR_SETTINGS); break;
-    case SCR_BLE_CONFIG: ble_stop(); switchToScreen(SCR_DASHBOARD); break;
-    case SCR_BLE_PAIRING:
-      blePairingPending = false;
-      blePairingAccepted = false;
-      ble_stop();
-      switchToScreen(SCR_BLE_CONFIG);
-      ble_start();
-      break;
+    case SCR_PORTAL: portal_stop(); switchToScreen(SCR_DASHBOARD); break;
   }
 }
 
@@ -1574,16 +1502,13 @@ void sendToGroq(String query) {
 static bool wifiConnecting = false;
 static unsigned long wifiStartMs = 0;
 
-// ===== BLE WIFI CONFIG =====
-#define SERVICE_UUID        "12345678-1234-1234-1234-123456789abc"
-#define CHAR_WRITE_UUID     "12345678-1234-1234-1234-123456789abd"
-static BLEServer *bleServer = NULL;
-static BLECharacteristic *bleChar = NULL;
-static bool bleDeviceConnected = false;
-static bool bleStarted = false;
-static bool bleCredentialsReceived = false;
-static String bleRecvSSID = "";
-static String bleRecvPass = "";
+// ===== WIFI CAPTIVE PORTAL =====
+static WebServer portalServer(80);
+static DNSServer dnsServer;
+static bool portalActive = false;
+static bool portalCredsReceived = false;
+static String portalRecvSSID = "";
+static String portalRecvPass = "";
 static Preferences prefs;
 
 // ===== INPUT =====
@@ -1661,7 +1586,7 @@ void processInput(const String &input, bool fromBT) {
     add_user_msg(cmd.c_str());
     lv_label_set_text(input_label, ("> " + cmd).c_str());
     sendToGroq(cmd);
-    lv_label_set_text(input_label, fromBT ? "Type on BLE..." : "Type in Serial Monitor...");
+    lv_label_set_text(input_label, "Type in Serial Monitor...");
   }
 }
 
@@ -2173,8 +2098,8 @@ static void doSelect() {
         if (WiFi.status() == WL_CONNECTED) {
           switchToScreen(SCR_JARVIS);
         } else {
-          ble_start();
-          switchToScreen(SCR_BLE_CONFIG);
+          portal_start();
+          switchToScreen(SCR_PORTAL);
         }
         break;
       case 1: switchToScreen(SCR_SD_MENU); break;
@@ -2217,14 +2142,6 @@ static void doSelect() {
       wifiStartMs = millis();
       switchToScreen(SCR_JARVIS);
     }
-  } else if (currentScreen == SCR_BLE_PAIRING) {
-    blePairingAccepted = true;
-    blePairingPending = false;
-    if (ble_status_label) {
-      lv_label_set_text(ble_status_label, "Paired! Waiting for data...");
-      lv_obj_set_style_text_color(ble_status_label, lv_color_hex(0x22c55e), 0);
-    }
-    switchToScreen(SCR_BLE_CONFIG);
   }
 }
 
@@ -2367,111 +2284,136 @@ void handleButton() {
   }
 }
 
-// ===== BLE WIFI CONFIG =====
-class BleServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer *pServer) override {
-    bleDeviceConnected = true;
-    blePairingPending = true;
-    Serial.println("[BLE] Client connected - waiting for pairing accept");
-  }
-  void onDisconnect(BLEServer *pServer) override {
-    bleDeviceConnected = false;
-    blePairingPending = false;
-    blePairingAccepted = false;
-    Serial.println("[BLE] Client disconnected");
-    if (!bleCredentialsReceived && bleStarted) {
-      BLEDevice::startAdvertising();
-      Serial.println("[BLE] Restarting advertising...");
-    }
-  }
-};
+// ===== CAPTIVE PORTAL =====
+const char PORTAL_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JARVIS WiFi Setup</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#0a0e17;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.c{background:#111827;border:1px solid #1e3a5f;border-radius:12px;padding:24px;width:90%;max-width:360px}
+h2{color:#fbbf24;text-align:center;margin-bottom:16px;font-size:20px}
+label{color:#9ca3af;font-size:14px;display:block;margin-top:12px}
+input{width:100%;padding:10px;border:1px solid #1e3a5f;border-radius:6px;background:#0a0e17;color:#fff;font-size:16px;margin-top:4px}
+button{width:100%;padding:12px;border:none;border-radius:6px;background:#22c55e;color:#fff;font-size:16px;font-weight:bold;margin-top:20px;cursor:pointer}
+button:active{background:#16a34a}
+.s{text-align:center;color:#22c55e;margin-top:16px;font-size:14px}
+.e{text-align:center;color:#ef4444;margin-top:16px;font-size:14px}
+</style></head><body>
+<div class="c">
+<h2>JARVIS WiFi Setup</h2>
+<form method="POST" action="/connect">
+<label>WiFi Network (SSID)</label>
+<input type="text" name="ssid" required placeholder="Enter network name">
+<label>Password</label>
+<input type="password" name="pass" placeholder="Enter password (or leave blank)">
+<button type="submit">Connect</button>
+</form>
+</div></body></html>
+)rawliteral";
 
-class BleCharCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pChar) override {
-    if (!blePairingAccepted) {
-      Serial.println("[BLE] Write rejected - pairing not accepted");
-      return;
-    }
-    String val = pChar->getValue();
-    Serial.println("[BLE] Received: " + val);
-    int ssidIdx = val.indexOf("\"ssid\":\"");
-    int passIdx = val.indexOf("\"pass\":\"");
-    if (ssidIdx >= 0 && passIdx >= 0) {
-      ssidIdx += 8;
-      passIdx += 8;
-      int ssidEnd = val.indexOf("\"", ssidIdx);
-      int passEnd = val.indexOf("\"", passIdx);
-      if (ssidEnd > ssidIdx && passEnd > passIdx) {
-        bleRecvSSID = val.substring(ssidIdx, ssidEnd);
-        bleRecvPass = val.substring(passIdx, passEnd);
-        bleCredentialsReceived = true;
-        Serial.println("[BLE] SSID: " + bleRecvSSID);
-      }
-    }
-  }
-};
+const char PORTAL_OK[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JARVIS Connected</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#0a0e17;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.c{background:#111827;border:1px solid #1e3a5f;border-radius:12px;padding:24px;text-align:center;width:90%;max-width:360px}
+h2{color:#22c55e;margin-bottom:12px}
+p{color:#9ca3af;font-size:14px;margin-top:8px}
+</style></head><body>
+<div class="c">
+<h2>Connected!</h2>
+<p>WiFi credentials saved.</p>
+<p>JARVIS will connect now.</p>
+<p style="margin-top:16px;color:#fbbf24">You can close this page.</p>
+</div></body></html>
+)rawliteral";
 
-static BleServerCallbacks bleServerCB;
-static BleCharCallbacks bleCharCB;
-
-void ble_start() {
-  Serial.println("[BLE] Starting BLE...");
-  BLEDevice::init("JARVIS-CONFIG");
-  bleServer = BLEDevice::createServer();
-  bleServer->setCallbacks(&bleServerCB);
-
-  BLEService *svc = bleServer->createService(SERVICE_UUID);
-  bleChar = svc->createCharacteristic(
-    CHAR_WRITE_UUID,
-    BLECharacteristic::PROPERTY_WRITE
-  );
-  bleChar->setCallbacks(&bleCharCB);
-
-  svc->start();
-  BLEAdvertising *adv = BLEDevice::getAdvertising();
-  adv->addServiceUUID(SERVICE_UUID);
-  adv->setScanResponse(true);
-  adv->setMinPreferred(0x06);
-  adv->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
-  bleStarted = true;
-  bleDeviceConnected = false;
-  bleCredentialsReceived = false;
-  Serial.println("[BLE] Advertising started: JARVIS-CONFIG");
+void portal_handle_root() {
+  portalServer.send(200, "text/html", PORTAL_HTML);
 }
 
-void ble_stop() {
-  if (bleStarted) {
-    BLEDevice::stopAdvertising();
-    BLEDevice::deinit(true);
-    bleStarted = false;
-    bleDeviceConnected = false;
-    Serial.println("[BLE] Stopped");
+void portal_handle_connect() {
+  if (portalServer.method() == HTTP_POST) {
+    portalRecvSSID = portalServer.arg("ssid");
+    portalRecvPass = portalServer.arg("pass");
+    portalCredsReceived = true;
+    portalServer.send(200, "text/html", PORTAL_OK);
+    Serial.println("[PORTAL] SSID: " + portalRecvSSID);
+  } else {
+    portalServer.send(303);
   }
 }
 
-void ble_check_credentials() {
-  if (bleCredentialsReceived && bleRecvSSID.length() > 0) {
-    ble_stop();
+void portal_handle_captive() {
+  portalServer.sendHeader("Location", String("http://") + WiFi.softAPIP().toString());
+  portalServer.send(302, "text/plain", "");
+}
+
+void portal_start() {
+  Serial.println("[PORTAL] Starting captive portal...");
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("JARVIS-CONFIG");
+  delay(100);
+  Serial.println("[PORTAL] AP IP: " + WiFi.softAPIP().toString());
+
+  dnsServer.start(53, "*", WiFi.softAPIP());
+
+  portalServer.on("/", portal_handle_root);
+  portalServer.on("/connect", portal_handle_connect);
+  portalServer.on("/generate_204", portal_handle_captive);
+  portalServer.on("/hotspot-detect.html", portal_handle_captive);
+  portalServer.on("/connecttest.txt", portal_handle_captive);
+  portalServer.on("/ncsi.txt", portal_handle_captive);
+  portalServer.onNotFound(portal_handle_captive);
+  portalServer.begin();
+  portalActive = true;
+  portalCredsReceived = false;
+  Serial.println("[PORTAL] Portal started. Waiting for credentials...");
+}
+
+void portal_stop() {
+  if (portalActive) {
+    portalServer.stop();
+    dnsServer.stop();
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    portalActive = false;
+    Serial.println("[PORTAL] Stopped");
+  }
+}
+
+void portal_handle() {
+  if (portalActive) {
+    dnsServer.processNextRequest();
+    portalServer.handleClient();
+  }
+  if (portalCredsReceived && portalRecvSSID.length() > 0) {
+    portal_stop();
     prefs.begin("wifi_cfg", false);
-    prefs.putString("ssid", bleRecvSSID);
-    prefs.putString("pass", bleRecvPass);
+    prefs.putString("ssid", portalRecvSSID);
+    prefs.putString("pass", portalRecvPass);
     prefs.end();
-    Serial.println("[BLE] Credentials saved: " + bleRecvSSID);
+    Serial.println("[PORTAL] Credentials saved: " + portalRecvSSID);
 
-    if (ble_status_label) {
-      lv_label_set_text(ble_status_label, "Connecting to WiFi...");
-      lv_obj_set_style_text_color(ble_status_label, lv_color_hex(0x22c55e), 0);
+    if (portal_status_label) {
+      lv_label_set_text(portal_status_label, "Connecting to WiFi...");
+      lv_obj_set_style_text_color(portal_status_label, lv_color_hex(0x22c55e), 0);
     }
     lv_refr_now(NULL);
 
     WiFi.disconnect();
-    WiFi.begin(bleRecvSSID.c_str(), bleRecvPass.c_str());
+    WiFi.begin(portalRecvSSID.c_str(), portalRecvPass.c_str());
     wifiConnecting = true;
     wifiStartMs = millis();
-    bleCredentialsReceived = false;
-    bleRecvSSID = "";
-    bleRecvPass = "";
+    portalCredsReceived = false;
+    portalRecvSSID = "";
+    portalRecvPass = "";
   }
 }
 
@@ -2556,8 +2498,7 @@ void setup() {
   ui_create_video_list();
   ui_create_photo_list();
   ui_create_brightness();
-  ui_create_ble_config();
-  ui_create_ble_pairing();
+  ui_create_portal();
 
   showSplash();
 
@@ -2617,8 +2558,8 @@ void loop() {
         lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x22c55e), 0);
         lv_label_set_text(input_label, "Type a message...");
       }
-      if (currentScreen == SCR_BLE_CONFIG) {
-        ble_stop();
+      if (currentScreen == SCR_PORTAL) {
+        portal_stop();
         switchToScreen(SCR_JARVIS);
       }
       rgb_green(); delay(300); rgb_off();
@@ -2632,25 +2573,18 @@ void loop() {
         lv_label_set_text(lbl_wifi, "WiFi: Failed");
         lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xef4444), 0);
       }
-      if (currentScreen == SCR_BLE_CONFIG && !bleStarted) {
-        if (ble_status_label) {
-          lv_label_set_text(ble_status_label, "WiFi failed. Try BLE again.");
-          lv_obj_set_style_text_color(ble_status_label, lv_color_hex(0xef4444), 0);
+      if (currentScreen == SCR_PORTAL && !portalActive) {
+        if (portal_status_label) {
+          lv_label_set_text(portal_status_label, "WiFi failed. 2tap=Back");
+          lv_obj_set_style_text_color(portal_status_label, lv_color_hex(0xef4444), 0);
         }
       }
       Serial.println("[JARVIS] WiFi connection timed out.");
     }
   }
 
-  if (bleStarted && currentScreen == SCR_BLE_CONFIG) {
-    ble_check_credentials();
-  }
-
-  if (blePairingPending && currentScreen != SCR_BLE_PAIRING) {
-    if (ble_pairing_device_label) {
-      lv_label_set_text(ble_pairing_device_label, "PC wants to connect");
-    }
-    switchToScreen(SCR_BLE_PAIRING);
+  if (portalActive) {
+    portal_handle();
   }
 
   delay(2);

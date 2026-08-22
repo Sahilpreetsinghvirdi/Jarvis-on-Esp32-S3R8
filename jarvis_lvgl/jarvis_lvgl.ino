@@ -2098,6 +2098,9 @@ static void doSelect() {
         if (WiFi.status() == WL_CONNECTED) {
           switchToScreen(SCR_JARVIS);
         } else {
+          WiFi.disconnect(true);
+          wifiConnecting = false;
+          delay(200);
           portal_start();
           switchToScreen(SCR_PORTAL);
         }
